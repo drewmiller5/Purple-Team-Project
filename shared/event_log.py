@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,8 +11,12 @@ def log_event(log_path: str, event: dict) -> dict:
     event = dict(event)
     event.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
 
-    with open(p, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event) + "\n")
+    line = (json.dumps(event) + "\n").encode("utf-8")
+    fd = os.open(str(p), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
 
     return event
 
@@ -24,6 +29,10 @@ def read_events(log_path: str) -> list:
     with open(p, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return events

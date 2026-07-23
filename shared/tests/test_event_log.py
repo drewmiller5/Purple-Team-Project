@@ -25,3 +25,16 @@ def test_log_event_appends_multiple_events_in_order(tmp_path):
 
     events = read_events(path)
     assert [e["action"] for e in events] == ["recon", "alert", "exploit"]
+
+
+def test_read_events_skips_corrupt_line_and_keeps_valid_ones(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        '{"side": "red", "action": "recon"}\n'
+        '{"side": "blue", "action": "alert", "target": tru\n'
+        '{"side": "red", "action": "exploit"}\n',
+        encoding="utf-8",
+    )
+
+    events = read_events(str(path))
+    assert [e["action"] for e in events] == ["recon", "exploit"]
