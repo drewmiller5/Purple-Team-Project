@@ -1,0 +1,20 @@
+services:
+  target:
+    build:
+      context: .
+      dockerfile: target/Dockerfile
+    container_name: purple-lab-target
+    ports:
+      - "5000:5000"
+    networks:
+      - lab-net
+    volumes:
+      - target-logs:/app/target/logs
+
+networks:
+  lab-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  target-logs:
