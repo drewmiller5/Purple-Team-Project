@@ -3,6 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from shared.event_log import read_events
 from shared.memory import load_memory
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,10 +36,9 @@ def capture_checkpoint(version: str, archive_root: Path = ARCHIVE_ROOT) -> Path:
     red_memory = load_memory(str(RED_MEMORY_PATH)) or {"side": "red", "entries": []}
     blue_memory = load_memory(str(BLUE_MEMORY_PATH)) or {"side": "blue", "entries": []}
 
-    events = []
-    if EVENT_LOG_PATH.exists():
-        with open(EVENT_LOG_PATH, "r", encoding="utf-8") as f:
-            events = [json.loads(line) for line in f if line.strip()]
+    # Reuse shared.event_log's hardened parser (Task 9) instead of re-implementing
+    # — it gracefully skips corrupt JSON lines instead of crashing.
+    events = read_events(str(EVENT_LOG_PATH))
 
     with open(dest / "red_memory.json", "w", encoding="utf-8") as f:
         json.dump(red_memory, f, indent=2)
