@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+target/purple_lab.db
+target/logs/*.jsonl
+.env
