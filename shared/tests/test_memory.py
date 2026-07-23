@@ -1,3 +1,6 @@
+import json
+import re
+
 import pytest
 
 from shared.memory import append_memory_entry, load_memory, new_empty_memory, save_memory
@@ -43,3 +46,40 @@ def test_append_memory_entry_appends_to_existing(tmp_path):
     result = append_memory_entry(path, {"side": "red", "note": "attempt 2"})
     assert len(result["entries"]) == 2
     assert result["entries"][1]["note"] == "attempt 2"
+
+
+def test_save_memory_leaves_no_temp_file_and_target_always_valid(tmp_path):
+    path = tmp_path / "blue_memory.json"
+    save_memory(str(path), new_empty_memory("blue"))
+
+    # No stray temp file left behind in the directory after a successful save.
+    leftovers = [p for p in tmp_path.iterdir() if p.name != path.name]
+    assert leftovers == []
+
+    # The target file is always fully-formed, valid JSON -- never truncated
+    # or half-written, which is what a concurrent reader would need to see.
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["side"] == "blue"
+
+    # Overwriting an existing file behaves the same way: no leftover temp
+    # file, and the replaced target is still valid JSON.
+    save_memory(str(path), new_empty_memory("blue"))
+    leftovers = [p for p in tmp_path.iterdir() if p.name != path.name]
+    assert leftovers == []
+    with open(path, "r", encoding="utf-8") as f:
+        json.load(f)
+
+
+def test_load_memory_raises_clear_error_on_corrupt_json(tmp_path):
+    path = tmp_path / "corrupt_memory.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    path_pattern = re.escape(str(path))
+
+    with pytest.raises(ValueError, match=path_pattern):
+        load_memory(str(path))
+
+    # append_memory_entry must surface the same clear error, not a raw
+    # json.JSONDecodeError traceback.
+    with pytest.raises(ValueError, match=path_pattern):
+        append_memory_entry(str(path), {"side": "red", "note": "n/a"})
