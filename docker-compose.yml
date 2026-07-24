@@ -12,6 +12,27 @@ services:
       - target-logs:/app/target/logs
       - event-log:/app/shared_logs
 
+  red_agent:
+    build:
+      context: .
+      dockerfile: red_agent/Dockerfile
+    container_name: purple-lab-red
+    networks:
+      - lab-net
+      - agent-net
+    depends_on:
+      - target
+    environment:
+      - TARGET_BASE_URL=http://target:5000
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_MODEL=qwen2.5:7b
+      - RED_MAX_ITERATIONS=50
+      - RED_MEMORY_PATH=/app/red_agent/memory/red_memory.json
+      - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
+    volumes:
+      - red-memory:/app/red_agent/memory
+      - event-log:/app/shared_logs
+
 networks:
   lab-net:
     driver: bridge
@@ -26,3 +47,4 @@ networks:
 volumes:
   target-logs:
   event-log:
+  red-memory:
