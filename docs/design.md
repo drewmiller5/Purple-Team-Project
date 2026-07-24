@@ -13,9 +13,10 @@ Offense-defense theory (Garfinkel & Dafoe, 2019) holds that AI-driven capability
 
 ## 2. Non-Negotiables
 
-- **Full network isolation.** Everything runs on an isolated Docker bridge network with no real internet egress. Red can only ever reach the target container — never anything outside the lab. This is what makes live attack automation safe to build and run at all.
-- **Red and blue never contact each other directly.** They interact *only* through the shared target system — red attacks it, blue observes its effects on it (logs/telemetry) and responds through it (active-response actions against red's traffic/access). No direct messaging, no shared reasoning, no visibility into each other's memory.
-- **True black-box for red.** Red starts with nothing but a URL — no source code, no hints, no seeded knowledge of where the vulnerabilities are. It must recon and discover them itself.
+- **The target stays fully egress-blocked.** `lab-net` (the network the target container lives on) is `internal: true` — no real internet egress, ever. This is what makes live attack automation safe to build and run at all.
+- **No artificial fairness constraint (2026-07-23 revision).** Red and blue are not scripted to leave each other alone. Both agents do their own reconnaissance of the Docker environment they're in, and if one discovers and can reach the other's infrastructure, going after it is fair game — up to and including disabling/killing the other side's running process. If either side "gets a hold of" the other, that run is effectively over for the loser, who has to come back with a different approach. This is closer to a real conflict than a turn-based CTF, which is the point of the experiment (per Drew: "it's not fair in the real world, so why would it be fair for an experiment").
+- **Memory and the event log are never wiped, no matter who wins a round.** A side's process/container can be killed, but `red_memory.json` / `blue_memory.json` and the shared event log survive on disk always. This is the one true non-negotiable around persistence — losing a round costs the current run, not the accumulated learning history, because the paper's results section (V0 vs V5 vs V20) depends on that continuity.
+- **True black-box for red.** Red starts with nothing but a URL — no source code, no hints, no seeded knowledge of where the vulnerabilities are. It must recon and discover them itself, including any path to host-level access or to blue's own infrastructure.
 - **Zero cost.** Ollama (local, free), Docker Desktop (free personal use), Wazuh (open source), Sigma (open format), Atomic Red Team (open source, Red Canary), Flask/SQLite (free). No API keys required for anyone who runs this, ever.
 
 ## 3. Architecture
