@@ -10,11 +10,19 @@ services:
       - lab-net
     volumes:
       - target-logs:/app/target/logs
+      - event-log:/app/shared_logs
 
 networks:
   lab-net:
     driver: bridge
     internal: true
+  agent-net:
+    driver: bridge
+    # Deliberately NOT internal — this is how red/blue agent containers
+    # reach Ollama running on the host. The target container is never
+    # attached to this network; that's what preserves the egress-block
+    # guarantee verified for lab-net.
 
 volumes:
   target-logs:
+  event-log:
