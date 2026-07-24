@@ -7,6 +7,7 @@ from werkzeug.security import generate_password_hash
 from target.db import init_db, seed_db
 from target.logging_middleware import register_logging
 from target.routes.admin import admin_bp
+from target.routes.diagnostics import diagnostics_bp
 from target.routes.documents import documents_bp
 from target.routes.public import public_bp
 
@@ -28,6 +29,7 @@ def create_app(db_path: str = None, log_path: str = None) -> Flask:
     app.register_blueprint(public_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(documents_bp)
+    app.register_blueprint(diagnostics_bp)
 
     return app
 
