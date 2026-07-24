@@ -11,7 +11,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "method": {"type": "string", "enum": ["GET", "POST"]},
-                    "path": {"type": "string", "description": "URL path, e.g. /search or /admin/login"},
+                    "path": {"type": "string", "description": "URL path to request, e.g. /"},
                     "params": {"type": "object", "description": "Query string parameters for GET"},
                     "data": {"type": "object", "description": "Form body fields for POST"},
                 },
@@ -53,9 +53,14 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         args = json.loads(args) if args else {}
 
     if name == "http_request":
+        try:
+            method = args["method"]
+            path = args["path"]
+        except KeyError as exc:
+            return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
         result = http.request(
-            method=args["method"],
-            path=args["path"],
+            method=method,
+            path=path,
             params=args.get("params"),
             data=args.get("data"),
         )
@@ -63,7 +68,13 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         return json.dumps(result)
 
     if name == "record_finding":
-        state.record_finding(args["category"], args["detail"], args["success"])
+        try:
+            category = args["category"]
+            detail = args["detail"]
+            success = args["success"]
+        except KeyError as exc:
+            return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
+        state.record_finding(category, detail, success)
         return json.dumps({"recorded": True})
 
     if name == "recall_past_findings":

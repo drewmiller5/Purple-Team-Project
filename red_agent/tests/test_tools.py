@@ -82,3 +82,16 @@ def test_dispatch_unknown_tool_returns_error():
     call = {"function": {"name": "nonexistent_tool", "arguments": {}}}
     result = dispatch_tool_call(call, http=MagicMock(), state=MagicMock())
     assert json.loads(result) == {"error": "unknown tool nonexistent_tool"}
+
+
+def test_dispatch_http_request_missing_required_arg_returns_clean_error():
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "GET"},  # missing required "path"
+        }
+    }
+    result = dispatch_tool_call(call, http=MagicMock(), state=MagicMock())
+
+    parsed = json.loads(result)
+    assert "error" in parsed
