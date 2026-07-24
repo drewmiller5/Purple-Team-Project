@@ -31,7 +31,7 @@ next single action, then call exactly one tool.
 def run(config) -> None:
     state = RedAgentState(config)
     http = HttpTool(config.target_base_url)
-    ollama = OllamaClient(config.ollama_host, config.ollama_model)
+    ollama = OllamaClient(config.ollama_host, config.ollama_model, timeout=300.0)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(base_url=config.target_base_url)}
