@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import g, request
@@ -57,7 +58,7 @@ def register_logging(app, log_path: str = None):
             status_code = 500
 
         entry = {
-            "timestamp": time.time(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "remote_addr": request.remote_addr,
             "method": request.method,
             "path": request.path,
