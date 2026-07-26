@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: target/Dockerfile
     container_name: purple-lab-target
+    cap_add:
+      - NET_ADMIN
     ports:
       - "5000:5000"
     networks:
@@ -15,6 +17,15 @@ services:
     volumes:
       - target-logs:/app/target/logs
       - event-log:/app/shared_logs
+      # Active Response with <location>local</location> executes on the
+      # agent that generated the triggering event (i.e. target itself),
+      # not on the manager -- confirmed empirically during Task 7 (see
+      # /var/ossec/logs/active-responses.log on this container, not the
+      # manager's). The custom lock-account/kill-session commands must
+      # therefore be present in target's own active-response bin dir too,
+      # matching the same path Wazuh's real agent binary expects.
+      - ./wazuh/active-response/lock-account.sh:/var/ossec/active-response/bin/lock-account.sh
+      - ./wazuh/active-response/kill-session.sh:/var/ossec/active-response/bin/kill-session.sh
 
   red_agent:
     build:
@@ -113,6 +124,8 @@ services:
       - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
       - ./wazuh/config/wazuh_cluster/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
       - ./wazuh-rules/target_rules.xml:/var/ossec/etc/rules/target_rules.xml
+      - ./wazuh/active-response/lock-account.sh:/var/ossec/active-response/bin/lock-account.sh
+      - ./wazuh/active-response/kill-session.sh:/var/ossec/active-response/bin/kill-session.sh
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.9.2
