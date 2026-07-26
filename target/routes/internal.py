@@ -19,6 +19,8 @@ def lock_account():
 @internal_bp.route("/kill-session", methods=["POST"])
 def kill_session():
     user_id = request.form.get("user_id", type=int)
+    if user_id is None:
+        return jsonify({"error": "user_id is required and must be numeric"}), 400
     conn = get_connection(current_app.config["DB_PATH"])
     conn.execute("INSERT INTO blocked_users (user_id) VALUES (?)", (user_id,))
     conn.commit()

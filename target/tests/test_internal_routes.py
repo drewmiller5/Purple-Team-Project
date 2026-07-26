@@ -38,3 +38,21 @@ def test_unblocked_account_logs_in_normally(tmp_path):
         "/admin/login", data={"username": "admin", "password": "admin123"}
     )
     assert b"Welcome" in response.data
+
+
+def test_kill_session_rejects_missing_or_non_numeric_user_id(tmp_path):
+    client = _make_client(tmp_path)
+    client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+
+    # Missing user_id entirely.
+    response = client.post("/internal/kill-session", data={})
+    assert response.status_code == 400
+
+    # Non-numeric user_id.
+    response = client.post("/internal/kill-session", data={"user_id": "not-a-number"})
+    assert response.status_code == 400
+
+    # Confirm no NULL block row was inserted -- the admin session is still
+    # live and diagnostics still succeeds (not silently "killed").
+    diag_response = client.post("/admin/diagnostics", data={"host": "127.0.0.1"})
+    assert diag_response.status_code != 403
