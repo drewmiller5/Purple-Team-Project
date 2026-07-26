@@ -8,6 +8,10 @@ services:
       - "5000:5000"
     networks:
       - lab-net
+    depends_on:
+      - wazuh.manager
+    environment:
+      - WAZUH_MANAGER=wazuh.manager
     volumes:
       - target-logs:/app/target/logs
       - event-log:/app/shared_logs
