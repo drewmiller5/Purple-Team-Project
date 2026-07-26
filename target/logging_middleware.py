@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import g, request
+from flask import g, request, session
 
 DEFAULT_LOG_PATH = "target/logs/requests.jsonl"
 
@@ -60,12 +60,27 @@ def register_logging(app, log_path: str = None):
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "remote_addr": request.remote_addr,
+            # Duplicate of remote_addr under Wazuh's own reserved field name.
+            # The generic JSON decoder (ruleset/decoders/0006-json_decoders.xml)
+            # auto-populates Wazuh's static `srcip` field whenever a JSON log
+            # contains a literal "srcip" key -- confirmed via wazuh-logtest
+            # (Task 7 fix-round). Without this, `firewall-drop`'s Active
+            # Response has nothing to read and fails with "Cannot read
+            # 'srcip' from data", even though remote_addr is present under a
+            # non-reserved key name.
+            "srcip": request.remote_addr,
             "method": request.method,
             "path": request.path,
             "query_params": _redact_params(request.args.to_dict()),
             "form_params": _redact_params(request.form.to_dict()),
             "status_code": status_code,
             "duration_ms": duration_ms,
+            # Authenticated principal for this request, pulled from the Flask
+            # session (not a request attribute -- unauthenticated requests
+            # log this as null). Makes the acting user available to Active
+            # Response scripts like kill-session.sh, which parse it out of
+            # the alert JSON to know which session to kill.
+            "user_id": session.get("user_id"),
         }
         with _log_write_lock:
             with open(app.config["REQUEST_LOG_PATH"], "a", encoding="utf-8") as f:

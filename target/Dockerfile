@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iputils-ping curl gnupg apt-transport-https lsb-release procps \
+    iputils-ping curl gnupg apt-transport-https lsb-release procps iptables \
     && curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" > /etc/apt/sources.list.d/wazuh.list \
     && apt-get update && apt-get install -y --no-install-recommends wazuh-agent=4.9.2-1 \
