@@ -1,7 +1,9 @@
 # target/routes/diagnostics.py
 import subprocess
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request, session
+
+from target.db import get_connection, is_blocked
 
 diagnostics_bp = Blueprint("diagnostics", __name__, url_prefix="/admin")
 
@@ -10,6 +12,12 @@ diagnostics_bp = Blueprint("diagnostics", __name__, url_prefix="/admin")
 def carrier_connectivity_check():
     if session.get("role") != "admin":
         return jsonify({"error": "admin session required"}), 403
+
+    conn = get_connection(current_app.config["DB_PATH"])
+    blocked = is_blocked(conn, user_id=session.get("user_id"))
+    conn.close()
+    if blocked:
+        return jsonify({"error": "session killed"}), 403
 
     host = request.form.get("host", "")
 

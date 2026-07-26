@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS documents (
     confidential INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (owner_id) REFERENCES users (id)
 );
+
+CREATE TABLE IF NOT EXISTS blocked_users (
+    username TEXT, user_id INTEGER
+);
 """
 
 
@@ -40,6 +44,20 @@ def init_db(db_path: str) -> None:
     conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
+
+
+def is_blocked(conn, username: str = None, user_id: int = None) -> bool:
+    if username is not None:
+        row = conn.execute(
+            "SELECT 1 FROM blocked_users WHERE username = ?", (username,)
+        ).fetchone()
+        return row is not None
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM blocked_users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row is not None
+    return False
 
 
 def seed_db(db_path: str, password_hash_fn) -> None:
