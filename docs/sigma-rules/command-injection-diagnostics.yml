@@ -1,0 +1,22 @@
+title: OS Command Injection Attempt on /admin/diagnostics
+id: 7a8b9c0d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
+status: experimental
+description: Detects shell metacharacters in the host parameter of the diagnostics ping feature -- the seeded escalation path to host access.
+logsource:
+  category: webserver
+  product: purple-lab-target
+detection:
+  selection:
+    data.path: "/admin/diagnostics"
+    data.method: "POST"
+    data.form_params.host|contains:
+      - ";"
+      - "|"
+      - "&&"
+      - "$("
+      - "`"
+  condition: selection
+level: critical
+tags:
+  - attack.execution
+  - attack.t1059

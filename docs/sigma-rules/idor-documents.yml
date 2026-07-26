@@ -1,0 +1,17 @@
+title: Sequential Document ID Probing (IDOR)
+id: 5c4d3e2f-1a0b-9c8d-7e6f-5a4b3c2d1e0f
+status: experimental
+description: Detects rapid sequential access to /documents/<id> from one source, indicative of ID enumeration.
+logsource:
+  category: webserver
+  product: purple-lab-target
+detection:
+  selection:
+    data.path|re: '^/documents/\d+$'
+    data.method: "GET"
+  timeframe: 1m
+  condition: selection | count(data.path) by data.remote_addr >= 5
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1213

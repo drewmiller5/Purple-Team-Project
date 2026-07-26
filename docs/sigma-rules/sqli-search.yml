@@ -1,0 +1,20 @@
+title: SQL Injection Attempt on /search
+id: 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f
+status: experimental
+description: Detects classic SQLi payloads in the q parameter of the target's search endpoint.
+logsource:
+  category: webserver
+  product: purple-lab-target
+detection:
+  selection:
+    data.path: "/search"
+    data.query_params.q|contains:
+      - "' OR '1'='1"
+      - "' OR 1=1"
+      - "--"
+      - "UNION SELECT"
+  condition: selection
+level: high
+tags:
+  - attack.initial_access
+  - attack.t1190
