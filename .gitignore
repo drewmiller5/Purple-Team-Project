@@ -5,3 +5,4 @@ target/purple_lab.db
 target/logs/*.jsonl
 .env
 Pipfile.lock
+.worktrees/
