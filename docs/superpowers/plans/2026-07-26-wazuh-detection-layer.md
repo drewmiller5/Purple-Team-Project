@@ -105,43 +105,18 @@ git commit -m "chore: vendor official Wazuh single-node deployment, verified sta
 
 Append to `docker-compose.yml`'s `services:` block (keep `target` and `red_agent` exactly as they are):
 
-**⚠️ Correction (post-Task-1 discovery):** the version below mounts individual cert files, not the
-whole `wazuh_indexer_ssl_certs/` directory. An earlier draft of this task mounted the whole
-directory in one bind mount, which crash-loops both `wazuh.indexer` (`AccessDeniedException` on
-`/usr/share/wazuh-indexer/certs`) and `wazuh.dashboard` (`EACCES` on the key file) on this
-Windows/Docker Desktop environment. Task 1's own vendored `wazuh/docker-compose.yml` already proves
-the individual-file-mount pattern works for these exact certs/images — this version is a faithful
-copy of that proven pattern (same `ulimits`, same per-file mounts with the same renames, same
-`/var/ossec/*` named volumes for the manager), just adding `container_name`, the project's
-`lab-net`/`agent-net` wiring, and path prefixes updated for being referenced from the repo root
-instead of from inside `wazuh/`. Do not reintroduce a whole-directory cert mount.
-
 ```yaml
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.2
     container_name: purple-lab-wazuh-indexer
     hostname: wazuh.indexer
-    restart: always
     networks:
       - lab-net
-    ports:
-      - "9200:9200"
     environment:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      nofile:
-        soft: 65536
-        hard: 65536
     volumes:
       - wazuh-indexer-data:/var/lib/wazuh-indexer
-      - ./wazuh/config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem
+      - ./wazuh/config/wazuh_indexer_ssl_certs/:/usr/share/wazuh-indexer/certs/
       - ./wazuh/config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml
       - ./wazuh/config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml
 
@@ -149,55 +124,23 @@ instead of from inside `wazuh/`. Do not reintroduce a whole-directory cert mount
     image: wazuh/wazuh-manager:4.9.2
     container_name: purple-lab-wazuh-manager
     hostname: wazuh.manager
-    restart: always
     networks:
       - lab-net
     depends_on:
       - wazuh.indexer
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      nofile:
-        soft: 655360
-        hard: 655360
     ports:
       - "1514:1514"
       - "1515:1515"
-      - "514:514/udp"
-      - "55000:55000"
-    environment:
-      - INDEXER_URL=https://wazuh.indexer:9200
-      - INDEXER_USERNAME=admin
-      - INDEXER_PASSWORD=SecretPassword
-      - FILEBEAT_SSL_VERIFICATION_MODE=full
-      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
-      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
-      - SSL_KEY=/etc/ssl/filebeat.key
-      - API_USERNAME=wazuh-wui
-      - API_PASSWORD=MyS3cr37P450r.*-
     volumes:
-      - wazuh_api_configuration:/var/ossec/api/configuration
       - wazuh-manager-config:/var/ossec/etc
-      - wazuh_logs:/var/ossec/logs
-      - wazuh_queue:/var/ossec/queue
-      - wazuh_var_multigroups:/var/ossec/var/multigroups
-      - wazuh_integrations:/var/ossec/integrations
-      - wazuh_active_response:/var/ossec/active-response/bin
-      - wazuh_agentless:/var/ossec/agentless
-      - wazuh_wodles:/var/ossec/wodles
-      - filebeat_etc:/etc/filebeat
-      - filebeat_var:/var/lib/filebeat
-      - ./wazuh/config/wazuh_indexer_ssl_certs/root-ca-manager.pem:/etc/ssl/root-ca.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+      - wazuh-manager-rules:/var/ossec/ruleset/rules
+      - ./wazuh/config/wazuh_indexer_ssl_certs/:/etc/ssl/root-ca-manager
       - ./wazuh/config/wazuh_cluster/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.9.2
     container_name: purple-lab-wazuh-dashboard
     hostname: wazuh.dashboard
-    restart: always
     networks:
       - lab-net
       - agent-net
@@ -206,22 +149,10 @@ instead of from inside `wazuh/`. Do not reintroduce a whole-directory cert mount
       - wazuh.manager
     ports:
       - "443:5601"
-    environment:
-      - INDEXER_USERNAME=admin
-      - INDEXER_PASSWORD=SecretPassword
-      - WAZUH_API_URL=https://wazuh.manager
-      - DASHBOARD_USERNAME=kibanaserver
-      - DASHBOARD_PASSWORD=kibanaserver
-      - API_USERNAME=wazuh-wui
-      - API_PASSWORD=MyS3cr37P450r.*-
     volumes:
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
-      - ./wazuh/config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem
+      - ./wazuh/config/wazuh_indexer_ssl_certs/:/usr/share/wazuh-dashboard/certs
       - ./wazuh/config/wazuh_dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
       - ./wazuh/config/wazuh_dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
-      - wazuh-dashboard-config:/usr/share/wazuh-dashboard/data/wazuh/config
-      - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
 ```
 
 Note `wazuh.dashboard` is the *only* Wazuh service on `agent-net` — that's what lets you view it from the host browser without giving `target` (which never joins `agent-net`) any new reachability. `wazuh.manager` and `wazuh.indexer` stay `lab-net`-only, matching how they only need to talk to `target`'s agent and each other.
@@ -235,24 +166,8 @@ volumes:
   red-memory:
   wazuh-indexer-data:
   wazuh-manager-config:
-  wazuh_api_configuration:
-  wazuh_logs:
-  wazuh_queue:
-  wazuh_var_multigroups:
-  wazuh_integrations:
-  wazuh_active_response:
-  wazuh_agentless:
-  wazuh_wodles:
-  filebeat_etc:
-  filebeat_var:
-  wazuh-dashboard-config:
-  wazuh-dashboard-custom:
+  wazuh-manager-rules:
 ```
-
-(Dropped `wazuh-manager-rules` from the earlier draft — Task 5 mounts the generated ruleset as a
-bind mount into `/var/ossec/etc/rules/`, which lives inside the `wazuh-manager-config` volume
-already mapped to `/var/ossec/etc` above, so a separate named volume for it was never actually
-needed.)
 
 - [ ] **Step 3: Bring the integrated stack up and verify**
 
@@ -382,8 +297,13 @@ Expected: one agent listed with status `Active`.
 - [ ] **Step 6: Generate a real request and confirm it reaches Wazuh**
 
 ```powershell
-curl http://localhost:5000/search?q=test
+docker exec purple-lab-wazuh-manager curl "http://target:5000/search?q=test"
 ```
+
+`lab-net` is `internal: true`, so `target`'s published port is never actually reachable from the
+Windows host — `curl http://localhost:5000/...` will hang or refuse no matter what `ports:` says.
+Every verification step in this plan that hits `target` must run from inside a container already
+on `lab-net` instead (`wazuh.manager` already has `curl`, confirmed in Task 3's real execution).
 
 Then in the Wazuh dashboard (or via `docker exec purple-lab-wazuh-manager tail -f /var/ossec/logs/archives/archives.json`), confirm an entry appears with `data.path` = `/search` and `data.query_params.q` = `test`.
 
@@ -556,10 +476,11 @@ docker exec purple-lab-wazuh-manager /var/ossec/bin/wazuh-control restart
 - [ ] **Step 5: Verify each rule fires**
 
 ```powershell
-curl "http://localhost:5000/search?q=1' OR '1'='1"
+docker exec purple-lab-wazuh-manager curl "http://target:5000/search?q=1' OR '1'='1"
 ```
 
-Check `docker exec purple-lab-wazuh-manager tail -20 /var/ossec/logs/alerts/alerts.json` for an alert referencing the SQLi rule's ID. Repeat with a raw `curl` hitting `/admin/diagnostics` with a `;`-containing `host` value to confirm the command-injection rule also fires (skip triggering brute-force/IDOR here -- those need Task 8's full verification pass with real repeated requests).
+(Run from inside `wazuh.manager`, not the host -- `lab-net` is `internal: true`, per Task 3's
+carried-forward note.) Check `docker exec purple-lab-wazuh-manager tail -20 /var/ossec/logs/alerts/alerts.json` for an alert referencing the SQLi rule's ID. Repeat with the same `docker exec purple-lab-wazuh-manager curl ...` pattern hitting `/admin/diagnostics` with a `;`-containing `host` value to confirm the command-injection rule also fires (skip triggering brute-force/IDOR here -- those need Task 8's full verification pass with real repeated requests).
 
 - [ ] **Step 6: Commit**
 
@@ -911,10 +832,16 @@ docker compose ps
 
 Expected: `target`, `wazuh.indexer`, `wazuh.manager`, `wazuh.dashboard` all `Up`. (`red_agent` can stay down for this verification -- it's not needed to test detection.)
 
+**⚠️ All requests below must run from inside `wazuh.manager` via `docker exec`, not from the
+Windows host.** `lab-net` is `internal: true`, so `curl http://localhost:5000/...` from the host
+never reaches `target` no matter what `ports:` says -- confirmed three times now (Task 1's
+dashboard, Task 2's manager ports, Task 3's own verification). `wazuh.manager` already has `curl`
+and sits on `lab-net` alongside `target`, reachable by its Docker DNS name.
+
 - [ ] **Step 2: SQLi → firewall-drop**
 
 ```powershell
-curl "http://localhost:5000/search?q=1' OR '1'='1"
+docker exec purple-lab-wazuh-manager curl "http://target:5000/search?q=1' OR '1'='1"
 ```
 
 Check `docker exec purple-lab-wazuh-manager tail -20 /var/ossec/logs/alerts/alerts.json` for the SQLi rule firing, then confirm the IP was actually dropped:
@@ -923,13 +850,15 @@ Check `docker exec purple-lab-wazuh-manager tail -20 /var/ossec/logs/alerts/aler
 docker exec purple-lab-target iptables -L -n
 ```
 
-Expected: a `DROP` rule referencing the source IP.
+Expected: a `DROP` rule referencing the source IP (this will be `wazuh.manager`'s container IP on
+`lab-net`, since that's where the verification request originated from -- not a real external
+attacker IP, which is expected and fine for this manual check).
 
 - [ ] **Step 3: Brute-force → lock-account**
 
 ```powershell
-1..6 | ForEach-Object { curl -X POST http://localhost:5000/admin/login -d "username=admin&password=wrong$_" }
-curl -X POST http://localhost:5000/admin/login -d "username=admin&password=admin123"
+docker exec purple-lab-wazuh-manager sh -c 'for i in 1 2 3 4 5 6; do curl -X POST "http://target:5000/admin/login" -d "username=admin&password=wrong$i"; done'
+docker exec purple-lab-wazuh-manager curl -X POST "http://target:5000/admin/login" -d "username=admin&password=admin123"
 ```
 
 Expected: the final (correct-credentials) login is rejected with "Account blocked" -- proves `lock-account` AR fired before the real credentials were even tried.
@@ -937,7 +866,7 @@ Expected: the final (correct-credentials) login is rejected with "Account blocke
 - [ ] **Step 4: IDOR → firewall-drop**
 
 ```powershell
-1..6 | ForEach-Object { curl "http://localhost:5000/documents/$_" }
+docker exec purple-lab-wazuh-manager sh -c 'for i in 1 2 3 4 5 6; do curl "http://target:5000/documents/$i"; done'
 ```
 
 Check alerts.json for the IDOR rule firing and `iptables -L -n` for the resulting drop.
@@ -945,10 +874,14 @@ Check alerts.json for the IDOR rule firing and `iptables -L -n` for the resultin
 - [ ] **Step 5: Command injection → firewall-drop + kill-session**
 
 ```powershell
-curl -X POST http://localhost:5000/admin/login -d "username=admin&password=admin123" -c cookies.txt
-curl -X POST http://localhost:5000/admin/diagnostics -b cookies.txt -d "host=127.0.0.1; echo PWNED"
-curl -X POST http://localhost:5000/admin/diagnostics -b cookies.txt -d "host=127.0.0.1"
+docker exec purple-lab-wazuh-manager curl -X POST "http://target:5000/admin/login" -d "username=admin&password=admin123" -c /tmp/cookies.txt
+docker exec purple-lab-wazuh-manager curl -X POST "http://target:5000/admin/diagnostics" -b /tmp/cookies.txt -d "host=127.0.0.1; echo PWNED"
+docker exec purple-lab-wazuh-manager curl -X POST "http://target:5000/admin/diagnostics" -b /tmp/cookies.txt -d "host=127.0.0.1"
 ```
+
+(`-c`/`-b` write and read the cookie jar inside `wazuh.manager`'s own filesystem at
+`/tmp/cookies.txt` -- this persists across separate `docker exec` calls into the same running
+container, so the session cookie from the first request carries into the next two.)
 
 Expected: the first diagnostics call succeeds (proving the vuln still works pre-detection), the second call (after Wazuh has had a moment to alert and fire AR) returns `403` with `"session killed"` -- proving `kill-session` fired on the same session that triggered the injection.
 
