@@ -1,0 +1,136 @@
+<!--
+  target_rules.xml -- Wazuh native XML rules for the purple-lab `target` app.
+
+  Hand-written translation of the 4 Sigma rules in docs/sigma-rules/*.yml
+  (Task 4). NOT machine-generated: no working `sigma-cli` Wazuh backend
+  exists (verified -- see Task 5 report: pysigma-backend-wazuh is not on
+  PyPI, is not in `sigma plugin list`'s registry, and is tracked only as
+  an open, unimplemented feature request in SigmaHQ/pySigma discussion
+  #257 / SigmaHQ/pySigma-plugin-directory discussion #52).
+
+  FIELD-NAME FIDELITY FINDING (bigger than the brief anticipated): the
+  brief's flagged risk was that a hypothetical sigma-cli Wazuh backend
+  might not preserve the `data.` prefix on field paths. In fact, when
+  hand-writing these rules directly, testing via `wazuh-logtest` proved
+  the opposite problem: Wazuh's own rule-matching engine addresses
+  JSON-decoder dynamic fields WITHOUT the `data.` prefix (e.g. `path`,
+  `query_params.q`, `remote_addr`, `form_params.host`) -- that prefix is
+  added only by analysisd when *serializing* matched events into
+  alerts.json/archives.json output, not in the internal field namespace
+  `<field name="...">` matches against. Rules written with `data.`-
+  prefixed field names compiled and loaded with no XML errors but
+  silently never matched -- confirmed by isolating the base rule (which
+  matched fine) from each child field condition (which did not) via
+  repeated wazuh-logtest runs. All field references below are therefore
+  UNPREFIXED, verified against the real running manager.
+
+  Rule ID plan (local custom range 100000-119999):
+    100100  base/parent  - scopes everything below to target's request log
+    100101  ALERT        - SQLi on /search               (Sigma 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f)
+    100102  ALERT        - Command injection /admin/diag  (Sigma 7a8b9c0d-2e3f-4a5b-6c7d-8e9f0a1b2c3d)
+    100103  base (lvl 0) - single POST /admin/login hit, feeds 100104
+    100104  ALERT        - Bruteforce /admin/login         (Sigma 3d2e1f0a-4b5c-6d7e-8f9a-0b1c2d3e4f5a)
+    100105  base (lvl 0) - single GET /documents/<id> hit, feeds 100106
+    100106  ALERT        - IDOR sequential /documents/<id> (Sigma 5c4d3e2f-1a0b-9c8d-7e6f-5a4b3c2d1e0f)
+
+  Base rules (100100, 100103, 100105) are level="0" by design: level 0
+  rules are evaluated and internally tracked for frequency/if_matched_sid
+  correlation but are never written to alerts.log/alerts.json themselves.
+  This mirrors Wazuh's own shipped ruleset idiom for brute-force detection
+  (e.g. 0580-win-security_rules.xml rule 60204, T1110) -- only the
+  aggregating rule that crosses the threshold actually alerts.
+
+  Sigma's non-standard `count() by <field> >= N` aggregation syntax used
+  in bruteforce-admin-login.yml and idor-documents.yml has no standard
+  Sigma grammar and no backend could have converted it correctly. It is
+  expressed natively here via Wazuh's own <frequency>/<timeframe>/
+  <same_field> rule correlation options (same idiom Wazuh's shipped
+  ruleset uses for T1110 brute-force detections, e.g.
+  0580-win-security_rules.xml rule 60204/60205, and for arbitrary-field
+  grouping, e.g. 0350-amazon_rules.xml rule 80443 `same_field:
+  aws.httpRequest.clientIp`). `<same_source_ip/>` was considered but
+  rejected: it keys off Wazuh's built-in `srcip` dynamic field, which the
+  generic `json` decoder never populates (it has no concept that
+  `remote_addr` means source IP) -- confirmed by inspecting
+  /var/ossec/ruleset/decoders/0006-json_decoders.xml, which is a bare
+  plugin_decoder with no field-role mapping. `<same_field>remote_addr</same_field>`
+  is the correct, verified mechanism for this log source.
+-->
+<group name="local,purple_lab_target,">
+
+  <!-- ================= Base: scope to target's web request log ================= -->
+  <rule id="100100" level="0">
+    <decoded_as>json</decoded_as>
+    <location type="pcre2">requests\.jsonl$</location>
+    <description>Purple Lab target: web request log event</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- ================= SQLi on /search (single event) ================= -->
+  <rule id="100101" level="12">
+    <if_sid>100100</if_sid>
+    <field name="path" type="pcre2">^/search$</field>
+    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'1'='1|'\s*OR\s*1=1|--|UNION\s+SELECT)</field>
+    <description>SQL injection attempt on /search (Sigma: 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack.initial_access,attack.t1190,sqli,</group>
+  </rule>
+
+  <!-- ================= Command injection on /admin/diagnostics (single event) ================= -->
+  <rule id="100102" level="15">
+    <if_sid>100100</if_sid>
+    <field name="path" type="pcre2">^/admin/diagnostics$</field>
+    <field name="method" type="pcre2">^POST$</field>
+    <field name="form_params.host" type="pcre2">(;|\||&amp;&amp;|\$\(|`)</field>
+    <description>OS command injection attempt on /admin/diagnostics (Sigma: 7a8b9c0d-2e3f-4a5b-6c7d-8e9f0a1b2c3d)</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+    <group>attack.execution,attack.t1059,command_injection,</group>
+  </rule>
+
+  <!-- ================= Bruteforce /admin/login: base + frequency aggregation ================= -->
+  <rule id="100103" level="0">
+    <if_sid>100100</if_sid>
+    <field name="path" type="pcre2">^/admin/login$</field>
+    <field name="method" type="pcre2">^POST$</field>
+    <field name="status_code" type="pcre2">^200$</field>
+    <field name="form_params.username" type="pcre2">.*</field>
+    <description>POST to /admin/login with username parameter present</description>
+    <options>no_full_log</options>
+    <group>bruteforce_login_base,</group>
+  </rule>
+
+  <rule id="100104" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100103</if_matched_sid>
+    <same_field>remote_addr</same_field>
+    <description>Repeated admin login attempts: 5+ POSTs to /admin/login from the same source within 120s -- possible brute force (Sigma: 3d2e1f0a-4b5c-6d7e-8f9a-0b1c2d3e4f5a)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>attack.credential_access,attack.t1110,bruteforce,</group>
+  </rule>
+
+  <!-- ================= IDOR: sequential /documents/<id> probing: base + frequency aggregation ================= -->
+  <rule id="100105" level="0">
+    <if_sid>100100</if_sid>
+    <field name="path" type="pcre2">^/documents/\d+$</field>
+    <field name="method" type="pcre2">^GET$</field>
+    <description>GET to /documents/&lt;id&gt;</description>
+    <options>no_full_log</options>
+    <group>idor_probe_base,</group>
+  </rule>
+
+  <rule id="100106" level="7" frequency="5" timeframe="60">
+    <if_matched_sid>100105</if_matched_sid>
+    <same_field>remote_addr</same_field>
+    <description>Sequential document ID probing (IDOR): 5+ requests to /documents/&lt;id&gt; from the same source within 60s (Sigma: 5c4d3e2f-1a0b-9c8d-7e6f-5a4b3c2d1e0f)</description>
+    <mitre>
+      <id>T1213</id>
+    </mitre>
+    <group>attack.discovery,attack.t1213,idor,</group>
+  </rule>
+
+</group>
