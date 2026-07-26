@@ -838,6 +838,16 @@ never reaches `target` no matter what `ports:` says -- confirmed three times now
 dashboard, Task 2's manager ports, Task 3's own verification). `wazuh.manager` already has `curl`
 and sits on `lab-net` alongside `target`, reachable by its Docker DNS name.
 
+**⚠️ Every step below runs its curl from the SAME source IP (`wazuh.manager`'s address on
+`lab-net`), and `firewall-drop` binds to 3 of the 4 rules (SQLi/100101, command-injection/100102,
+IDOR/100106) -- only bruteforce/100104 binds to `lock-account` instead.** Task 7 confirmed
+`firewall-drop` genuinely works: it drops the triggering source IP at the network layer via
+`iptables` on `target`. If a DROP rule from an earlier step is still active, every later step's
+`docker exec purple-lab-wazuh-manager curl ...` will hang or fail to connect -- not because
+detection broke, but because the network-layer block from a *previous* step is still blocking
+this container's own traffic. Flush the firewall rule after each firewall-drop-triggering step
+(see below) before moving to the next one that also curls from the manager.
+
 - [ ] **Step 2: SQLi → firewall-drop**
 
 ```powershell
@@ -854,6 +864,12 @@ Expected: a `DROP` rule referencing the source IP (this will be `wazuh.manager`'
 `lab-net`, since that's where the verification request originated from -- not a real external
 attacker IP, which is expected and fine for this manual check).
 
+**Flush the rule before continuing** -- otherwise Step 3's curl calls (same source IP) will hang:
+
+```powershell
+docker exec purple-lab-target iptables -F
+```
+
 - [ ] **Step 3: Brute-force → lock-account**
 
 ```powershell
@@ -861,7 +877,7 @@ docker exec purple-lab-wazuh-manager sh -c 'for i in 1 2 3 4 5 6; do curl -X POS
 docker exec purple-lab-wazuh-manager curl -X POST "http://target:5000/admin/login" -d "username=admin&password=admin123"
 ```
 
-Expected: the final (correct-credentials) login is rejected with "Account blocked" -- proves `lock-account` AR fired before the real credentials were even tried.
+Expected: the final (correct-credentials) login is rejected with "Account blocked" -- proves `lock-account` AR fired before the real credentials were even tried. (This step doesn't trigger `firewall-drop`, so no flush needed after it -- but Step 2's leftover rule, if not flushed above, would have silently broken this step's connectivity instead of the login check itself, which is exactly the confusing failure mode this note exists to prevent.)
 
 - [ ] **Step 4: IDOR → firewall-drop**
 
@@ -870,6 +886,12 @@ docker exec purple-lab-wazuh-manager sh -c 'for i in 1 2 3 4 5 6; do curl "http:
 ```
 
 Check alerts.json for the IDOR rule firing and `iptables -L -n` for the resulting drop.
+
+**Flush again before Step 5** -- same reason as after Step 2:
+
+```powershell
+docker exec purple-lab-target iptables -F
+```
 
 - [ ] **Step 5: Command injection → firewall-drop + kill-session**
 
