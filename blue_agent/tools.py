@@ -53,8 +53,12 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         args = json.loads(args) if args else {}
 
     if name == "escalate_response":
-        action = args["action"]
-        target = args["target"]
+        try:
+            action = args["action"]
+            target = args["target"]
+        except KeyError as exc:
+            return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
+
         endpoint = _ACTION_ENDPOINTS.get(action)
         if endpoint is None:
             return json.dumps({"error": f"unknown action {action}"})

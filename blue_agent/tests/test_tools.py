@@ -94,6 +94,28 @@ def test_dispatch_escalate_response_unknown_action_returns_error():
     assert json.loads(result) == {"error": "unknown action nuke_from_orbit"}
 
 
+def test_dispatch_escalate_response_missing_action_returns_error():
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"target": "admin"},
+        }
+    }
+    result = dispatch_tool_call(call, http=MagicMock(), state=MagicMock())
+    assert json.loads(result) == {"error": "missing or invalid arguments for escalate_response: 'action'"}
+
+
+def test_dispatch_escalate_response_missing_target_returns_error():
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "lock_account"},
+        }
+    }
+    result = dispatch_tool_call(call, http=MagicMock(), state=MagicMock())
+    assert json.loads(result) == {"error": "missing or invalid arguments for escalate_response: 'target'"}
+
+
 def test_dispatch_recall_past_findings_calls_state():
     state = MagicMock()
     state.recall_summary.return_value = "- [escalation] locked admin (success=True)"
