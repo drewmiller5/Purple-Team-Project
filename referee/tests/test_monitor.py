@@ -100,3 +100,10 @@ def test_red_decisive_win_true_when_blue_stale_and_red_has_host_access():
     ]
     now = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=200)
     assert red_decisive_win(events, now, stale_seconds=90) is True
+
+
+def test_blue_decisive_win_true_when_recent_streak_blocked_via_connection_error():
+    events = [{"side": "blue", "phase": "heartbeat"}] + [
+        {"side": "red", "phase": "http_request", "response": {"error": "Connection refused"}},
+    ] * 3
+    assert blue_decisive_win(events, streak_threshold=3) is True

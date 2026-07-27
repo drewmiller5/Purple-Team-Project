@@ -62,3 +62,19 @@ def test_run_never_writes_assessment_into_shared_event_log(tmp_path):
     if events.exists():
         for line in events.read_text().splitlines():
             assert json.loads(line).get("side") != "white"
+
+
+def test_run_prefers_blue_win_over_budget_expired_when_both_conditions_hold(tmp_path):
+    config = _config(tmp_path, max_round_seconds=0, blue_win_streak=3)
+    log_event(config.event_log_path, {"side": "blue", "phase": "heartbeat"})
+    for _ in range(3):
+        log_event(config.event_log_path, {
+            "side": "red", "phase": "http_request", "response": {"status_code": 403},
+        })
+
+    run(config)
+
+    assessments = [json.loads(l) for l in Path(config.referee_log_path).read_text().splitlines()]
+    round_over = [a for a in assessments if a["phase"] == "round_over"]
+    assert len(round_over) == 1
+    assert round_over[0]["outcome"] == "blue"
