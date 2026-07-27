@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from referee.config import RefereeConfig
@@ -78,3 +79,29 @@ def test_run_prefers_blue_win_over_budget_expired_when_both_conditions_hold(tmp_
     round_over = [a for a in assessments if a["phase"] == "round_over"]
     assert len(round_over) == 1
     assert round_over[0]["outcome"] == "blue"
+
+
+def test_run_prefers_red_win_over_budget_expired_when_both_conditions_hold(tmp_path):
+    """Regression test: ensure red_decisive_win is checked before budget_expired.
+    If the if/elif order were changed to check budget_expired first,
+    this test would fail by producing outcome='budget_expired' instead of 'red'."""
+    config = _config(tmp_path, max_round_seconds=0, blue_stale_seconds=1)
+
+    # Log blue heartbeat with a timestamp far in the past (so it's stale by run() time)
+    stale_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    log_event(config.event_log_path, {
+        "side": "blue", "phase": "heartbeat", "timestamp": stale_timestamp
+    })
+
+    # Log red's successful access to /admin/diagnostics
+    log_event(config.event_log_path, {
+        "side": "red", "phase": "http_request",
+        "request": {"path": "/admin/diagnostics"}, "response": {"status_code": 200},
+    })
+
+    run(config)
+
+    assessments = [json.loads(l) for l in Path(config.referee_log_path).read_text().splitlines()]
+    round_over = [a for a in assessments if a["phase"] == "round_over"]
+    assert len(round_over) == 1
+    assert round_over[0]["outcome"] == "red"
