@@ -65,7 +65,10 @@ def test_run_heartbeats_every_iteration_with_no_new_alerts(tmp_path):
     events_path = Path(config.event_log_path)
     events = [json.loads(l) for l in events_path.read_text().splitlines()]
     heartbeats = [e for e in events if e["phase"] == "heartbeat"]
-    assert len(heartbeats) == 3
+    # 1 unconditional pre-wait heartbeat (fires before _wait_for_go, so the referee
+    # has something to key its go-signal off of) + 3 in-loop heartbeats (one per
+    # max_iterations=3 iteration) = 4 total.
+    assert len(heartbeats) == 4
 
 
 def test_run_calls_ollama_and_dispatches_tool_calls_when_new_alerts_appear(tmp_path):
@@ -155,6 +158,26 @@ def test_run_handles_ollama_http_error_gracefully(tmp_path):
     assert any(e["phase"] == "ollama_error" for e in events)
     # Verify run_complete was logged (loop continued after error)
     assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_heartbeats_before_waiting_for_go_flag(tmp_path):
+    """Regression test for the go-signal deadlock (found live in Task 12's
+    end-to-end run): blue must emit a heartbeat unconditionally, before
+    waiting on go.flag, so the referee has something to key its go-signal
+    off of. Without this, blue and referee deadlock forever: referee only
+    writes go.flag after seeing a blue heartbeat, but blue never wrote
+    anything until go.flag already existed."""
+    config = _config(tmp_path, max_iterations=1)
+
+    def fake_wait(referee_state_dir, poll_interval):
+        events = [json.loads(l) for l in Path(config.event_log_path).read_text().splitlines()]
+        assert any(e["phase"] == "heartbeat" for e in events)
+        Path(referee_state_dir).mkdir(parents=True, exist_ok=True)
+        (Path(referee_state_dir) / "stop.flag").touch()
+
+    with patch("blue_agent.loop._wait_for_go", side_effect=fake_wait):
+        with patch("blue_agent.loop.OllamaClient"):
+            run(config)
 
 
 def test_run_handles_ollama_key_error_gracefully(tmp_path):

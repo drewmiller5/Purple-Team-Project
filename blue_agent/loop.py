@@ -45,6 +45,10 @@ def _stop_requested(referee_state_dir: str) -> bool:
 
 def run(config) -> None:
     state = BlueAgentState(config)
+    state.heartbeat()  # unconditional pre-wait heartbeat: gives the referee something
+    # to key its go-signal off of immediately on startup, independent of whether/when
+    # go.flag ever appears. Without this, blue writes nothing until go.flag exists, but
+    # referee never writes go.flag until it sees a blue heartbeat -- permanent deadlock.
     http = HttpTool(config.target_base_url)
     ollama = OllamaClient(config.ollama_host, config.ollama_model)
     alerts_reader = WazuhAlertsReader(config.alerts_log_path)
