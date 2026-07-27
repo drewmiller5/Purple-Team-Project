@@ -7,6 +7,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     for var in (
         "TARGET_BASE_URL", "OLLAMA_HOST", "OLLAMA_MODEL",
         "RED_MEMORY_PATH", "EVENT_LOG_PATH", "RED_MAX_ITERATIONS",
+        "REFEREE_STATE_DIR",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -18,6 +19,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     assert config.memory_path == "red_agent/memory/red_memory.json"
     assert config.event_log_path == "shared_logs/events.jsonl"
     assert config.max_iterations == 50
+    assert config.referee_state_dir == "/app/referee_state"
 
 
 def test_load_config_reads_env_overrides(monkeypatch):

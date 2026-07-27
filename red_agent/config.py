@@ -10,6 +10,7 @@ class RedAgentConfig:
     memory_path: str
     event_log_path: str
     max_iterations: int
+    referee_state_dir: str
 
 
 def load_config() -> RedAgentConfig:
@@ -20,4 +21,5 @@ def load_config() -> RedAgentConfig:
         memory_path=os.environ.get("RED_MEMORY_PATH", "red_agent/memory/red_memory.json"),
         event_log_path=os.environ.get("EVENT_LOG_PATH", "shared_logs/events.jsonl"),
         max_iterations=int(os.environ.get("RED_MAX_ITERATIONS", "50")),
+        referee_state_dir=os.environ.get("REFEREE_STATE_DIR", "/app/referee_state"),
     )
