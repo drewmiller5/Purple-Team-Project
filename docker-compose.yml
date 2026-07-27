@@ -13,6 +13,12 @@ services:
       - lab-net
     depends_on:
       - wazuh.manager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     environment:
       - WAZUH_MANAGER=wazuh.manager
     volumes:
@@ -42,7 +48,8 @@ services:
       - lab-net
       - agent-net
     depends_on:
-      - target
+      target:
+        condition: service_healthy
     environment:
       - TARGET_BASE_URL=http://target:5000
       - OLLAMA_HOST=http://host.docker.internal:11434
