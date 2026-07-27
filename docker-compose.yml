@@ -54,6 +54,36 @@ services:
       - red-memory:/app/red_agent/memory
       - event-log:/app/shared_logs
 
+  blue_agent:
+    build:
+      context: .
+      dockerfile: blue_agent/Dockerfile
+    container_name: purple-lab-blue
+    networks:
+      - lab-net
+      - agent-net
+    depends_on:
+      - target
+      - wazuh.manager
+    environment:
+      - TARGET_BASE_URL=http://target:5000
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+      - BLUE_MAX_ITERATIONS=200
+      - BLUE_POLL_INTERVAL_SECONDS=5
+      - BLUE_MEMORY_PATH=/app/blue_agent/memory/blue_memory.json
+      - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
+      - WAZUH_ALERTS_PATH=/var/ossec/logs/alerts/alerts.json
+      - REFEREE_STATE_DIR=/app/referee_state
+    volumes:
+      - blue-memory:/app/blue_agent/memory
+      - event-log:/app/shared_logs
+      # Read-only: blue only ever reads Wazuh's alert stream, never writes
+      # into the manager's own log volume.
+      - wazuh_logs:/var/ossec/logs:ro
+      # Read-only: only the referee (Task 9) writes go.flag/stop.flag here.
+      - referee-state:/app/referee_state:ro
+
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.2
     container_name: purple-lab-wazuh-indexer
@@ -180,6 +210,8 @@ volumes:
   target-logs:
   event-log:
   red-memory:
+  blue-memory:
+  referee-state:
   wazuh-indexer-data:
   wazuh-manager-config:
   wazuh_api_configuration:
