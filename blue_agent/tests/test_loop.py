@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from blue_agent.config import BlueAgentConfig
 from blue_agent.loop import run
 
@@ -127,4 +129,52 @@ def test_run_handles_malformed_tool_call_missing_function_key(tmp_path):
     events_path = Path(config.event_log_path)
     events = [json.loads(l) for l in events_path.read_text().splitlines()]
     # Verify run_complete was logged (loop continued after malformed call)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_ollama_http_error_gracefully(tmp_path):
+    """Test that Ollama HTTP errors don't crash the loop."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        # First iteration: raise HTTPError
+        error_response = requests.Response()
+        error_response.status_code = 500
+        http_error = requests.HTTPError(response=error_response)
+        MockOllama.return_value.chat.side_effect = http_error
+
+        # Should not raise; should complete normally
+        run(config)
+        MockOllama.return_value.chat.assert_called()
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    # Verify ollama_error was logged
+    assert any(e["phase"] == "ollama_error" for e in events)
+    # Verify run_complete was logged (loop continued after error)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_ollama_key_error_gracefully(tmp_path):
+    """Test that unexpected Ollama response shapes (KeyError) don't crash the loop."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        # Return a response missing the "message" key
+        bad_response = {"unexpected_field": "value"}
+        MockOllama.return_value.chat.return_value = bad_response
+
+        # Should not raise; should complete normally
+        run(config)
+        MockOllama.return_value.chat.assert_called()
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    # Verify ollama_error was logged
+    assert any(e["phase"] == "ollama_error" for e in events)
+    # Verify run_complete was logged (loop continued after error)
     assert any(e["phase"] == "run_complete" for e in events)

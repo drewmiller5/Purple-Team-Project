@@ -2,6 +2,8 @@ import json
 import time
 from pathlib import Path
 
+import requests
+
 from blue_agent.http_tool import HttpTool
 from blue_agent.ollama_client import OllamaClient
 from blue_agent.state import BlueAgentState
@@ -75,8 +77,13 @@ def run(config) -> None:
             continue
 
         messages.append({"role": "user", "content": f"New Wazuh alerts:\n{json.dumps(new_alerts)}"})
-        response = ollama.chat(messages=messages, tools=TOOL_SCHEMAS)
-        assistant_message = response["message"]
+        try:
+            response = ollama.chat(messages=messages, tools=TOOL_SCHEMAS)
+            assistant_message = response["message"]
+        except (requests.RequestException, KeyError) as exc:
+            state.log_event({"phase": "ollama_error", "error": str(exc)})
+            time.sleep(config.poll_interval_seconds)
+            continue
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
