@@ -12,6 +12,7 @@ def _config(tmp_path):
         memory_path=str(tmp_path / "red_memory.json"),
         event_log_path=str(tmp_path / "events.jsonl"),
         max_iterations=5,
+        referee_state_dir=str(tmp_path / "referee_state"),
     )
 
 
