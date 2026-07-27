@@ -55,6 +55,46 @@
   /var/ossec/ruleset/decoders/0006-json_decoders.xml, which is a bare
   plugin_decoder with no field-role mapping. `<same_field>remote_addr</same_field>`
   is the correct, verified mechanism for this log source.
+
+  ============================================================================
+  TASK 8 UPDATE -- native frequency/if_matched_sid correlation never fires
+  ============================================================================
+  Despite everything above being verified correct (base rules match every
+  event, field names are right, same_field is the right primitive), rules
+  100104 and 100106 were extensively investigated live (via wazuh-logtest,
+  real traffic through the full stack, structural diffing against Wazuh's
+  own shipped working example for the exact same idiom --
+  0580-win-security_rules.xml rule 60204/60205, which is structurally
+  identical to 100103/100104 here -- and a maximally minimal zero-field-
+  condition if_matched_sid test rule against our own base rule) and NEVER
+  fire. All plausible hypotheses were refuted with concrete evidence. This
+  is a real Wazuh 4.9.2 behavior/environment issue, not a rule-authoring
+  mistake, and further reverse-engineering of Wazuh's internal correlation
+  engine was not a good use of remaining time.
+
+  Decision (explicit direction from the human controller, "the way a real
+  SOC/blue team would"): stop relying on Wazuh's native frequency/
+  if_matched_sid correlation entirely. The counting now happens in custom
+  Active Response scripts (wazuh/active-response/bruteforce-guard.sh,
+  wazuh/active-response/idor-guard.sh) that read target's own request log
+  directly and do their own threshold/window arithmetic, using the base
+  rules below as the trigger.
+
+  This required base rules 100103/100105 to move off level="0": Active
+  Response only dispatches off of real alerts, and level-0 rules are
+  evaluated for internal correlation bookkeeping only -- they are never
+  written to alerts.json and never trigger AR (confirmed against Wazuh 4.9
+  docs/behavior before choosing this over any level-0-AR-binding
+  alternative, which Wazuh does not support). Both base rules are now
+  level="3" -- a real but low-severity alert fires on every single
+  attempt, and the custom AR script decides internally whether the actual
+  threshold (5 in the original window) has been crossed before doing
+  anything for real. See wazuh/config/wazuh_cluster/wazuh_manager.conf's
+  Active Response section and the two guard scripts for the rest of this
+  design; rules 100104/100106 are left defined below, still expressing the
+  original Sigma-rule-derived intent (thresholds, MITRE mapping,
+  description) for documentation/traceability, but are no longer bound to
+  any Active Response and are not expected to ever appear in alerts.json.
 -->
 <group name="local,purple_lab_target,">
 
@@ -91,8 +131,14 @@
     <group>attack.execution,attack.t1059,command_injection,</group>
   </rule>
 
-  <!-- ================= Bruteforce /admin/login: base + frequency aggregation ================= -->
-  <rule id="100103" level="0">
+  <!-- ================= Bruteforce /admin/login: base + custom AR counting ================= -->
+  <!-- Task 8: bumped from level="0" to level="3" (real, low-severity alert
+       on EVERY attempt) so Wazuh Active Response has something to bind to.
+       bruteforce-guard.sh is bound to this rule (see wazuh_manager.conf)
+       and does the real 5-in-120s threshold counting itself, against
+       target's own request log, before ever actually locking an account.
+       See the file header above for the full why. -->
+  <rule id="100103" level="3">
     <if_sid>100100</if_sid>
     <field name="path" type="pcre2">^/admin/login$</field>
     <field name="method" type="pcre2">^POST$</field>
@@ -103,6 +149,13 @@
     <group>bruteforce_login_base,</group>
   </rule>
 
+  <!-- Task 8: never fires (see file header) -- native if_matched_sid/
+       frequency correlation on Wazuh 4.9.2 does not dispatch this rule
+       despite 100103 matching every event. Kept for documentation of the
+       original Sigma-derived intent (threshold, window, MITRE mapping)
+       only. NOT bound to any Active Response; bruteforce-guard.sh (bound
+       to 100103 above) replicates this rule's intent with its own
+       counting logic instead. -->
   <rule id="100104" level="10" frequency="5" timeframe="120">
     <if_matched_sid>100103</if_matched_sid>
     <same_field>remote_addr</same_field>
@@ -113,8 +166,11 @@
     <group>attack.credential_access,attack.t1110,bruteforce,</group>
   </rule>
 
-  <!-- ================= IDOR: sequential /documents/<id> probing: base + frequency aggregation ================= -->
-  <rule id="100105" level="0">
+  <!-- ================= IDOR: sequential /documents/<id> probing: base + custom AR counting ================= -->
+  <!-- Task 8: bumped from level="0" to level="3" for the same reason as
+       100103 above. idor-guard.sh is bound to this rule and does the real
+       5-in-60s threshold counting itself before blocking the source IP. -->
+  <rule id="100105" level="3">
     <if_sid>100100</if_sid>
     <field name="path" type="pcre2">^/documents/\d+$</field>
     <field name="method" type="pcre2">^GET$</field>
@@ -123,6 +179,11 @@
     <group>idor_probe_base,</group>
   </rule>
 
+  <!-- Task 8: never fires (see file header) -- same native-correlation
+       failure as 100104. Kept for documentation of the original
+       Sigma-derived intent only. NOT bound to any Active Response;
+       idor-guard.sh (bound to 100105 above) replicates this rule's
+       intent with its own counting logic instead. -->
   <rule id="100106" level="7" frequency="5" timeframe="60">
     <if_matched_sid>100105</if_matched_sid>
     <same_field>remote_addr</same_field>

@@ -26,6 +26,11 @@ services:
       # matching the same path Wazuh's real agent binary expects.
       - ./wazuh/active-response/lock-account.sh:/var/ossec/active-response/bin/lock-account.sh
       - ./wazuh/active-response/kill-session.sh:/var/ossec/active-response/bin/kill-session.sh
+      # Task 8: custom counting AR scripts -- see wazuh-rules/target_rules.xml
+      # header and wazuh_manager.conf for why native frequency correlation
+      # was abandoned in favor of these.
+      - ./wazuh/active-response/bruteforce-guard.sh:/var/ossec/active-response/bin/bruteforce-guard.sh
+      - ./wazuh/active-response/idor-guard.sh:/var/ossec/active-response/bin/idor-guard.sh
 
   red_agent:
     build:
@@ -126,6 +131,8 @@ services:
       - ./wazuh-rules/target_rules.xml:/var/ossec/etc/rules/target_rules.xml
       - ./wazuh/active-response/lock-account.sh:/var/ossec/active-response/bin/lock-account.sh
       - ./wazuh/active-response/kill-session.sh:/var/ossec/active-response/bin/kill-session.sh
+      - ./wazuh/active-response/bruteforce-guard.sh:/var/ossec/active-response/bin/bruteforce-guard.sh
+      - ./wazuh/active-response/idor-guard.sh:/var/ossec/active-response/bin/idor-guard.sh
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.9.2
