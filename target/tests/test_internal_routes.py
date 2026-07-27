@@ -104,6 +104,8 @@ def test_block_ip_rejects_invalid_ip_format(tmp_path):
 def test_block_ip_runs_iptables_drop_for_valid_ip(tmp_path):
     client = _make_client(tmp_path)
     with patch("target.routes.internal.subprocess.run") as mock_run:
+        # Configure mock to report success (returncode=0).
+        mock_run.return_value.returncode = 0
         response = client.post("/internal/block-ip", data={"source_ip": "172.19.0.5"})
 
     assert response.status_code == 200
@@ -111,3 +113,16 @@ def test_block_ip_runs_iptables_drop_for_valid_ip(tmp_path):
     calls = [c.args[0] for c in mock_run.call_args_list]
     assert ["iptables", "-I", "INPUT", "-s", "172.19.0.5", "-j", "DROP"] in calls
     assert ["iptables", "-I", "FORWARD", "-s", "172.19.0.5", "-j", "DROP"] in calls
+
+
+def test_block_ip_returns_500_when_iptables_fails(tmp_path):
+    client = _make_client(tmp_path)
+    with patch("target.routes.internal.subprocess.run") as mock_run:
+        # Configure mock to report failure (returncode=1) on first call.
+        mock_run.return_value.returncode = 1
+        response = client.post("/internal/block-ip", data={"source_ip": "172.19.0.5"})
+
+    assert response.status_code == 500
+    response_data = response.get_json()
+    assert "error" in response_data
+    assert response_data["blocked_ip"] == "172.19.0.5"

@@ -52,6 +52,11 @@ def block_ip():
     # diagnostics.py's deliberately-vulnerable ping. Mirrors exactly what
     # Plan 3A's idor-guard.sh already does at the AR-script layer, just
     # callable directly by blue_agent as an app-level escalation.
-    subprocess.run(["iptables", "-I", "INPUT", "-s", source_ip, "-j", "DROP"], check=False)
-    subprocess.run(["iptables", "-I", "FORWARD", "-s", source_ip, "-j", "DROP"], check=False)
+    result_input = subprocess.run(["iptables", "-I", "INPUT", "-s", source_ip, "-j", "DROP"], check=False)
+    result_forward = subprocess.run(["iptables", "-I", "FORWARD", "-s", source_ip, "-j", "DROP"], check=False)
+
+    # Check exit codes; return error if either call failed.
+    if result_input.returncode != 0 or result_forward.returncode != 0:
+        return jsonify({"error": "iptables command failed", "blocked_ip": source_ip}), 500
+
     return jsonify({"blocked_ip": source_ip}), 200
