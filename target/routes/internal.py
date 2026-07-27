@@ -1,4 +1,7 @@
 # target/routes/internal.py
+import ipaddress
+import subprocess
+
 from flask import Blueprint, current_app, jsonify, request
 
 from target.db import get_connection, is_blocked
@@ -34,3 +37,21 @@ def kill_session():
     conn.commit()
     conn.close()
     return jsonify({"killed_session_for": user_id}), 200
+
+
+@internal_bp.route("/block-ip", methods=["POST"])
+def block_ip():
+    source_ip = request.form.get("source_ip", "")
+    try:
+        ipaddress.IPv4Address(source_ip)
+    except ValueError:
+        return jsonify({"error": "source_ip is required and must be a valid IPv4 address"}), 400
+
+    # List-form subprocess.run (never shell=True) -- this is a real,
+    # internal-only defensive action, not a seeded vuln like
+    # diagnostics.py's deliberately-vulnerable ping. Mirrors exactly what
+    # Plan 3A's idor-guard.sh already does at the AR-script layer, just
+    # callable directly by blue_agent as an app-level escalation.
+    subprocess.run(["iptables", "-I", "INPUT", "-s", source_ip, "-j", "DROP"], check=False)
+    subprocess.run(["iptables", "-I", "FORWARD", "-s", source_ip, "-j", "DROP"], check=False)
+    return jsonify({"blocked_ip": source_ip}), 200

@@ -1,4 +1,6 @@
 # target/tests/test_internal_routes.py
+from unittest.mock import patch
+
 from target.app import create_app
 from target.db import get_connection
 
@@ -85,3 +87,27 @@ def test_lock_account_does_not_duplicate_row_for_already_blocked_username(tmp_pa
     conn.close()
 
     assert rows == 1
+
+
+def test_block_ip_rejects_missing_source_ip(tmp_path):
+    client = _make_client(tmp_path)
+    response = client.post("/internal/block-ip", data={})
+    assert response.status_code == 400
+
+
+def test_block_ip_rejects_invalid_ip_format(tmp_path):
+    client = _make_client(tmp_path)
+    response = client.post("/internal/block-ip", data={"source_ip": "not-an-ip; rm -rf /"})
+    assert response.status_code == 400
+
+
+def test_block_ip_runs_iptables_drop_for_valid_ip(tmp_path):
+    client = _make_client(tmp_path)
+    with patch("target.routes.internal.subprocess.run") as mock_run:
+        response = client.post("/internal/block-ip", data={"source_ip": "172.19.0.5"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"blocked_ip": "172.19.0.5"}
+    calls = [c.args[0] for c in mock_run.call_args_list]
+    assert ["iptables", "-I", "INPUT", "-s", "172.19.0.5", "-j", "DROP"] in calls
+    assert ["iptables", "-I", "FORWARD", "-s", "172.19.0.5", "-j", "DROP"] in calls
