@@ -14,10 +14,15 @@ services:
     depends_on:
       - wazuh.manager
     healthcheck:
+      # target's entrypoint retries Wazuh agent enrollment (~50-60s observed)
+      # before Flask starts serving -- retries=30 gives ~150s of post-start-
+      # period headroom (failures before start_period don't count against
+      # retries), comfortably above the observed startup time with margin
+      # for slower CI/grading runs, not just the ~50% headroom retries=20 gave.
       test: ["CMD", "curl", "-f", "http://localhost:5000/"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 30
       start_period: 10s
     environment:
       - WAZUH_MANAGER=wazuh.manager
