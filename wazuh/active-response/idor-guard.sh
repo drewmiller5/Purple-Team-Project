@@ -207,6 +207,27 @@ fi
 
 # Real threshold crossed -- block the source IP at the network layer for
 # real, same action firewall-drop's own binary performs on this platform.
+#
+# Final-review fix (finding #3): this script previously blocked with no
+# log line at all -- for a purple-team lab whose deliverable is the
+# observable detection->response chain, a real block with nothing
+# recording that it happened is a real gap.
+#
+# Deviation from the finding's suggested implementation: a plain `echo`
+# to stdout does NOT get captured into active-responses.log -- verified
+# empirically live (both for a bare echo here AND for lock-account.sh's
+# existing `curl -s` output, which also does not appear there despite a
+# real, confirmed lock-account block). The compiled Wazuh AR binaries
+# (firewall-drop, disable-account, etc., confirmed as actual ELF binaries
+# in this image, not shell scripts) write to that log via their own
+# internal logging, not via execd capturing stdout -- there is no shared
+# active-response.sh helper library in this Wazuh 4.9.2 image for custom
+# scripts to source either. So the only way to actually land a line in
+# active-responses.log is to append to it directly, which is what this
+# does instead. This one line only lives on the threshold-crossing path;
+# the below-threshold no-op above stays silent/cheap on purpose (that's
+# the hot path -- fires on every single GET).
+echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: threshold ${THRESHOLD} crossed for ${SRCIP} (count=${COUNT}), inserting DROP" >> /var/ossec/logs/active-responses.log
 iptables -I INPUT -s "$SRCIP" -j DROP
 iptables -I FORWARD -s "$SRCIP" -j DROP
 

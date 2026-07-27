@@ -1,7 +1,7 @@
 # target/routes/internal.py
 from flask import Blueprint, current_app, jsonify, request
 
-from target.db import get_connection
+from target.db import get_connection, is_blocked
 
 internal_bp = Blueprint("internal", __name__, url_prefix="/internal")
 
@@ -10,8 +10,16 @@ internal_bp = Blueprint("internal", __name__, url_prefix="/internal")
 def lock_account():
     username = request.form.get("username", "")
     conn = get_connection(current_app.config["DB_PATH"])
-    conn.execute("INSERT INTO blocked_users (username) VALUES (?)", (username,))
-    conn.commit()
+    # Final-review fix (finding #5): bruteforce-guard.sh re-invokes this
+    # endpoint on every subsequent matching event once the window count is
+    # >=5, so a real brute-force burst dispatches multiple lock-account
+    # POSTs for the same username -- live-verified to produce duplicate
+    # ('admin', None) rows before this check existed. Skip the insert (but
+    # still return 200 -- the caller's desired end state, "this account is
+    # blocked", already holds) if already blocked.
+    if not is_blocked(conn, username=username):
+        conn.execute("INSERT INTO blocked_users (username) VALUES (?)", (username,))
+        conn.commit()
     conn.close()
     return jsonify({"locked": username}), 200
 

@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: target/Dockerfile
     container_name: purple-lab-target
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
     ports:

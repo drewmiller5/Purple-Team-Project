@@ -893,6 +893,17 @@ Check alerts.json for the IDOR rule firing and `iptables -L -n` for the resultin
 docker exec purple-lab-target iptables -F
 ```
 
+**Clear `blocked_users` before Step 5** -- `lock-account` (Step 3) has no expiry/reversal path
+the way `firewall-drop`'s `<timeout>600</timeout>` gives `firewall-drop`-bound blocks, so the
+`admin` account is still locked from Step 3 at this point. Step 5 needs to log in as `admin` to
+get the session command injection needs; without this, Step 5's first login fails with "Account
+blocked" instead of demonstrating the vuln. Clear the table directly the same way other steps
+here already reach into the containers via `docker exec`:
+
+```powershell
+docker exec purple-lab-target python3 -c "import sqlite3; conn = sqlite3.connect('target/purple_lab.db'); conn.execute('DELETE FROM blocked_users'); conn.commit()"
+```
+
 - [ ] **Step 5: Command injection → firewall-drop + kill-session**
 
 ```powershell

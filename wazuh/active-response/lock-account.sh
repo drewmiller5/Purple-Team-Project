@@ -21,4 +21,11 @@
 INPUT_JSON=$(cat)
 USERNAME=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.form_params.username | select(. != null and . != "null")')
 
-curl -s -X POST http://target:5000/internal/lock-account -d "username=${USERNAME}"
+# Final-review fix (finding #6): USERNAME is attacker-influenced and was
+# previously interpolated into the POST body unescaped (-d
+# "username=${USERNAME}"). --data-urlencode percent-encodes the value
+# instead of splicing it into the body raw -- no behavior change for
+# well-formed input, but it removes the (low-impact, per reviewer)
+# ambiguity of unescaped `&`/`=` characters in USERNAME being interpreted
+# as additional form fields by curl/Flask's form parser.
+curl -s -X POST http://target:5000/internal/lock-account --data-urlencode "username=${USERNAME}"
