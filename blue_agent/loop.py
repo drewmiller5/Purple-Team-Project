@@ -85,7 +85,10 @@ def run(config) -> None:
             continue
 
         for call in tool_calls:
-            result = dispatch_tool_call(call, http=http, state=state)
+            try:
+                result = dispatch_tool_call(call, http=http, state=state)
+            except (KeyError, TypeError) as exc:
+                result = json.dumps({"error": f"malformed tool call: {exc}"})
             messages.append({"role": "tool", "content": result})
 
     state.log_event({"phase": "run_complete", "iteration_count": config.max_iterations})

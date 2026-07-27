@@ -103,3 +103,28 @@ def test_run_includes_target_base_url_in_system_prompt(tmp_path):
         system_message = messages_arg[0]
         assert system_message["role"] == "system"
         assert "http://target:5000" in system_message["content"]
+
+
+def test_run_handles_malformed_tool_call_missing_function_key(tmp_path):
+    """Test that a malformed tool_call (missing 'function' key) doesn't crash the loop."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    # Simulate Ollama returning a malformed tool_calls entry (missing "function" key)
+    malformed_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{}],  # Missing "function" key entirely
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = malformed_response
+        # Should not raise KeyError; should complete normally
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    # Verify run_complete was logged (loop continued after malformed call)
+    assert any(e["phase"] == "run_complete" for e in events)
