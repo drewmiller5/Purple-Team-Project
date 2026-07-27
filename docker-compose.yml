@@ -50,9 +50,11 @@ services:
       - RED_MAX_ITERATIONS=50
       - RED_MEMORY_PATH=/app/red_agent/memory/red_memory.json
       - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
+      - REFEREE_STATE_DIR=/app/referee_state
     volumes:
       - red-memory:/app/red_agent/memory
       - event-log:/app/shared_logs
+      - referee-state:/app/referee_state:ro
 
   blue_agent:
     build:
@@ -83,6 +85,32 @@ services:
       - wazuh_logs:/var/ossec/logs:ro
       # Read-only: only the referee (Task 9) writes go.flag/stop.flag here.
       - referee-state:/app/referee_state:ro
+
+  referee:
+    build:
+      context: .
+      dockerfile: referee/Dockerfile
+    container_name: purple-lab-referee
+    # Deliberately no `networks:` entry -- the referee never makes an HTTP
+    # call to anything. It only reads the shared event log and writes flag
+    # files/its own assessment log, all via volumes. This is the strongest
+    # form of "no direct kill capability over either agent" from the
+    # design spec §5 -- it isn't merely disciplined not to call red/blue,
+    # it has no route to reach them at all.
+    environment:
+      - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
+      - REFEREE_LOG_PATH=/app/referee_logs/referee_assessments.jsonl
+      - REFEREE_STATE_DIR=/app/referee_state
+      - REFEREE_MAX_ROUND_SECONDS=900
+      - REFEREE_BLUE_STALE_SECONDS=90
+      - REFEREE_BLUE_WIN_STREAK=3
+      - REFEREE_POLL_INTERVAL_SECONDS=3
+    volumes:
+      # Read-only -- referee reads the shared event log but its own
+      # assessment log lives in a separate volume it owns exclusively.
+      - event-log:/app/shared_logs:ro
+      - referee-logs:/app/referee_logs
+      - referee-state:/app/referee_state
 
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.2
@@ -212,6 +240,7 @@ volumes:
   red-memory:
   blue-memory:
   referee-state:
+  referee-logs:
   wazuh-indexer-data:
   wazuh-manager-config:
   wazuh_api_configuration:
