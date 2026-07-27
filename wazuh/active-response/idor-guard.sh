@@ -71,6 +71,36 @@
 # mode only runs `iptables -D` (and decrements) when that counter is
 # still positive, so a spurious delete from a below-threshold dispatch
 # can never remove a genuine block.
+#
+# Fix round 2 (task reviewer finding: non-atomic counter race): the
+# STATE_FILE read-modify-write above (cat, arithmetic, echo >) was not
+# atomic across concurrent invocations. execd can and does dispatch
+# multiple "add"s for the same source IP close together (empirically
+# observed in this project's own live testing -- 4 duplicate DROP rules
+# from a single burst); two such invocations racing on the same
+# STATE_FILE can both read the same stale counter value and both write
+# value+1, losing an increment. If the counter under-counts the true
+# number of blocks actually inserted, a later "delete" dispatch stops
+# reversing once the (too-low) counter hits zero, leaving a genuine
+# DROP rule stuck forever -- silently reintroducing the exact
+# stale-rule failure mode fix round 1 closed. Both the "add" and
+# "delete" code paths now serialize their counter read-modify-write
+# through a per-source-IP flock (STATE_DIR/$SRCIP.lock, confirmed
+# present in this image: flock ships in util-linux, an Essential/
+# Priority:required Debian package present on every Debian-based image
+# regardless of what target/Dockerfile explicitly apt-get installs, so
+# no Dockerfile change was needed). flock's lock is tied to the open
+# file descriptor, not a lockfile's mere existence, so it releases
+# automatically if the holding process crashes or is killed mid
+# critical-section -- unlike a hand-rolled mkdir/lockfile scheme, which
+# would need its own staleness timeout to keep a crash from wedging all
+# future invocations permanently. No -w/timeout is used when acquiring
+# it: the critical section is a handful of filesystem ops (sub-
+# millisecond), so there is no real wait-time concern, and a timeout
+# here would risk the alternative failure mode of silently dropping a
+# real increment (the exact bug being fixed) rather than just briefly
+# blocking. Per-IP (not a single global lock) so concurrent dispatches
+# for different source IPs never contend with each other.
 set -eu
 
 REQUEST_LOG="/app/target/logs/requests.jsonl"
@@ -108,6 +138,22 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE_FILE="$STATE_DIR/$SRCIP"
 
 if [ "$COMMAND" = "delete" ]; then
+    # Fix round 2: whole read-decide-write cycle serialized per source
+    # IP via flock on an already-open fd (see header for why flock over
+    # a hand-rolled lockfile). fd 9 -- confirmed empirically in this
+    # image's actual /bin/sh (dash) that `exec N>file` only supports
+    # single-digit N; a higher fd (tried 200 during development to dodge
+    # a theoretical collision with execd's own fds) fails outright with
+    # `exec: 200: not found`, which under `set -eu` aborts the script
+    # AFTER the iptables insert already ran -- silently leaving a real
+    # block with no counter entry, i.e. reintroducing the exact
+    # stuck-rule bug this fix exists to close, for a different reason.
+    # fd 9 is unused by execd itself (checked live: execd's own open fds
+    # are only 0-4), so it's both safe and the only reliable choice
+    # under this shell.
+    LOCK_FILE="$STATE_DIR/$SRCIP.lock"
+    exec 9>"$LOCK_FILE"
+    flock -x 9
     ACTIVE_BLOCKS=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
     case "$ACTIVE_BLOCKS" in ''|*[!0-9]*) ACTIVE_BLOCKS=0 ;; esac
     if [ "$ACTIVE_BLOCKS" -gt 0 ]; then
@@ -118,6 +164,7 @@ if [ "$COMMAND" = "delete" ]; then
         iptables -D FORWARD -s "$SRCIP" -j DROP 2>/dev/null || true
         echo $((ACTIVE_BLOCKS - 1)) > "$STATE_FILE"
     fi
+    flock -u 9
     exit 0
 fi
 
@@ -165,7 +212,13 @@ iptables -I FORWARD -s "$SRCIP" -j DROP
 
 # Record that this script inserted a real, reversible block for this IP
 # (fix round 1 finding #4) so a later "delete" dispatch knows to actually
-# reverse it.
+# reverse it. Fix round 2: read-modify-write serialized per source IP via
+# flock, same mechanism, lock file, and fd 9 (see delete path above for
+# why fd 9 specifically) as the delete path.
+LOCK_FILE="$STATE_DIR/$SRCIP.lock"
+exec 9>"$LOCK_FILE"
+flock -x 9
 ACTIVE_BLOCKS=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 case "$ACTIVE_BLOCKS" in ''|*[!0-9]*) ACTIVE_BLOCKS=0 ;; esac
 echo $((ACTIVE_BLOCKS + 1)) > "$STATE_FILE"
+flock -u 9
