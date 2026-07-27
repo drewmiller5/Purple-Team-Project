@@ -2,6 +2,12 @@ from datetime import datetime
 
 
 def has_blue_heartbeat(events: list) -> bool:
+    # go.flag is gated on this alone -- red_agent's own _wait_for_go is a
+    # free rider on blue's heartbeat, not anything red does itself (red has
+    # no heartbeat call of its own). If this ever becomes a symmetric
+    # "both agents ready" condition, red_agent/loop.py needs its own
+    # unconditional pre-wait heartbeat-equivalent event first, or the same
+    # deadlock blue_agent/loop.py had (fixed 2026-07-27) reappears for red.
     return any(e.get("side") == "blue" for e in events)
 
 
