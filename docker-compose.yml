@@ -309,11 +309,6 @@ networks:
     # reach Ollama running on the host. The target container is never
     # attached to this network; that's what preserves the egress-block
     # guarantee verified for lab-net.
-  dashboard-net:
-    driver: bridge
-    # Isolated network for purple_dashboard only -- it needs no
-    # connectivity to any other container (volumes are how it reads
-    # state), so it never joins lab-net or agent-net.
 
 volumes:
   target-logs:
