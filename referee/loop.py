@@ -13,6 +13,13 @@ def run(config) -> None:
     go_path = state_dir / "go.flag"
     stop_path = state_dir / "stop.flag"
 
+    # H27: referee-state is a persistent Docker volume -- a restart mid-lab
+    # (or, as here, a fresh round on a reused volume) must not let a prior
+    # round's flags leak in, or red/blue immediately misread the new round
+    # as already over before it starts.
+    go_path.unlink(missing_ok=True)
+    stop_path.unlink(missing_ok=True)
+
     start = datetime.now(timezone.utc)
     go_signaled = False
 

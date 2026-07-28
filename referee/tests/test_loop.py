@@ -30,6 +30,27 @@ def test_run_ends_round_immediately_on_zero_second_budget(tmp_path):
     assert any(a["phase"] == "round_over" and a["outcome"] == "budget_expired" for a in assessments)
 
 
+def test_run_clears_stale_flags_from_a_prior_round_at_start(tmp_path):
+    """H27 regression: referee-state is a persistent Docker volume. A prior
+    round's go.flag/stop.flag must not leak into a new round, or red/blue
+    agents (which just check for the files' existence) misread the fresh
+    round as already over before it starts."""
+    config = _config(tmp_path, max_round_seconds=0)
+    state_dir = Path(config.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "go.flag").touch()
+    (state_dir / "stop.flag").touch()
+
+    # No blue heartbeat logged this round -- run() itself would never
+    # legitimately touch go.flag on this path (only budget_expired fires).
+    run(config)
+
+    assert not (state_dir / "go.flag").exists(), (
+        "stale go.flag from a prior round leaked into this round -- "
+        "red/blue would wrongly see 'go' already signaled"
+    )
+
+
 def test_run_signals_go_once_blue_heartbeat_appears(tmp_path):
     config = _config(tmp_path, max_round_seconds=0)
     log_event(config.event_log_path, {"side": "blue", "phase": "heartbeat"})
