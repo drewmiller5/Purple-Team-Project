@@ -128,6 +128,51 @@ services:
       - referee-logs:/app/referee_logs
       - referee-state:/app/referee_state
 
+  purple_dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: purple-lab-dashboard
+    restart: unless-stopped
+    # Moved off the isolated dashboard-net onto lab-net (reach target) and
+    # agent-net (reach Ollama + round_helper) -- Plan 3D's whole point is
+    # letting a human act, not just observe. Disclosed, deliberate change
+    # to the isolation posture built in the read-only version of this
+    # service.
+    networks:
+      - lab-net
+      - agent-net
+    ports:
+      - "8080:8080"
+    environment:
+      - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
+      - REFEREE_LOG_PATH=/app/referee_logs/referee_assessments.jsonl
+      - REFEREE_STATE_DIR=/app/referee_state
+      - TARGET_BASE_URL=http://target:5000
+      - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
+      - ROUND_HELPER_URL=http://round_helper:8090
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+      - ADVISOR_LOG_PATH=/app/referee_logs/advisor_log.jsonl
+    volumes:
+      - event-log:/app/shared_logs
+      - referee-logs:/app/referee_logs
+      # No longer :ro -- manual round control needs to touch/clear
+      # go.flag/stop.flag.
+      - referee-state:/app/referee_state
+
+  round_helper:
+    build:
+      context: .
+      dockerfile: round_helper/Dockerfile
+    container_name: purple-lab-round-helper
+    networks:
+      - agent-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - COMPOSE_PROJECT_DIR=/app
+
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.2
     container_name: purple-lab-wazuh-indexer
@@ -264,6 +309,11 @@ networks:
     # reach Ollama running on the host. The target container is never
     # attached to this network; that's what preserves the egress-block
     # guarantee verified for lab-net.
+  dashboard-net:
+    driver: bridge
+    # Isolated network for purple_dashboard only -- it needs no
+    # connectivity to any other container (volumes are how it reads
+    # state), so it never joins lab-net or agent-net.
 
 volumes:
   target-logs:
