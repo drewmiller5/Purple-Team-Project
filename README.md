@@ -20,6 +20,12 @@ See `docs/design.md` for the full spec.
 
 ## Run in Docker (isolated network)
 
+Requires `INTERNAL_ACTION_TOKEN` set (shared secret authenticating `target`'s
+internal defensive endpoints against `blue_agent` and Wazuh's active-response
+scripts; no default, the stack fails closed without it). Copy
+`.env.example` to `.env` and fill in a random value, or export it directly:
+
+    cp .env.example .env   # then edit .env
     docker compose up --build
 
 ## What's built (Phase 1: Target Range + Core Infrastructure)
