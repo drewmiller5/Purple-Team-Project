@@ -35,9 +35,25 @@ def blue_decisive_win(events: list, streak_threshold: int) -> bool:
 
     def _is_blocked(e):
         response = e.get("response", {})
+        if not isinstance(response, dict):
+            return False
         return "error" in response or response.get("status_code") == 403
 
     return all(_is_blocked(e) for e in recent)
+
+
+def _parse_timestamp(e):
+    """Best-effort parse of an event's timestamp. Returns None (rather than
+    raising) if the key is missing or the value isn't a valid ISO-8601
+    string -- callers should skip events this returns None for instead of
+    letting a single malformed record crash the whole win-condition check."""
+    ts = e.get("timestamp")
+    if ts is None:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
 
 
 def red_decisive_win(events: list, now: datetime, stale_seconds: float) -> bool:
@@ -48,7 +64,10 @@ def red_decisive_win(events: list, now: datetime, stale_seconds: float) -> bool:
         return False
 
     blue_timestamps = [
-        datetime.fromisoformat(e["timestamp"]) for e in events if e.get("side") == "blue"
+        ts for ts in (_parse_timestamp(e) for e in events if e.get("side") == "blue")
+        if ts is not None
     ]
+    if not blue_timestamps:
+        return False
     last_blue = max(blue_timestamps)
     return (now - last_blue).total_seconds() >= stale_seconds
