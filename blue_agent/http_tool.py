@@ -1,3 +1,5 @@
+import os
+
 import requests
 
 
@@ -6,13 +8,16 @@ class HttpTool:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
+        self.internal_action_token = os.environ.get("INTERNAL_ACTION_TOKEN")
 
     def request(self, method: str, path: str, params: dict = None, data: dict = None) -> dict:
         url = f"{self.base_url}{path if path.startswith('/') else '/' + path}"
         try:
-            resp = self.session.request(
-                method.upper(), url, params=params, data=data, timeout=self.timeout,
-            )
+            headers = {}
+            if path.startswith("/internal/") and self.internal_action_token:
+                headers["X-Internal-Action-Token"] = self.internal_action_token
+            resp = self.session.request(method.upper(), url, params=params, data=data,
+                                        headers=headers, timeout=self.timeout)
         except requests.RequestException as exc:
             return {"error": str(exc)}
 

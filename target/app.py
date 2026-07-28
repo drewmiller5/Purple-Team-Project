@@ -1,4 +1,5 @@
 # target/app.py
+import os
 from pathlib import Path
 
 from flask import Flask
@@ -19,6 +20,9 @@ DEFAULT_LOG_PATH = "target/logs/requests.jsonl"
 def create_app(db_path: str = None, log_path: str = None) -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = "purple-lab-dev-key"  # sandboxed lab target, not production
+    # Action endpoints fail closed unless their token is injected by the
+    # container runtime. It is intentionally separate from Flask's session key.
+    app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")
     app.config["DB_PATH"] = db_path or DEFAULT_DB_PATH
 
     Path(app.config["DB_PATH"]).parent.mkdir(parents=True, exist_ok=True)

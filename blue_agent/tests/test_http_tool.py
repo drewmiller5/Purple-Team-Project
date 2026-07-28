@@ -8,7 +8,8 @@ from target.app import create_app
 
 
 @pytest.fixture
-def live_target(tmp_path):
+def live_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("INTERNAL_ACTION_TOKEN", "test-internal-action-token")
     app = create_app(
         db_path=str(tmp_path / "test.db"),
         log_path=str(tmp_path / "requests.jsonl"),

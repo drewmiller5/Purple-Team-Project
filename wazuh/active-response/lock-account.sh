@@ -56,7 +56,7 @@ USERNAME=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.form_params.userna
 # AR script's own outcome into that log (Wazuh's compiled AR binaries
 # write to it internally; execd does not capture custom scripts' stdout
 # into it).
-HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://target:5000/internal/lock-account --data-urlencode "username=${USERNAME}") || {
+HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://target:5000/internal/lock-account -H "X-Internal-Action-Token: ${INTERNAL_ACTION_TOKEN:?INTERNAL_ACTION_TOKEN is required}" --data-urlencode "username=${USERNAME}") || {
     echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/lock-account: curl request failed for username=${USERNAME}" >> /var/ossec/logs/active-responses.log
     exit 1
 }

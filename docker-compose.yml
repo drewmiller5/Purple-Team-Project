@@ -26,6 +26,9 @@ services:
       start_period: 10s
     environment:
       - WAZUH_MANAGER=wazuh.manager
+      # Required, externally supplied shared credential for Blue and Wazuh AR.
+      # No default: target fails closed if it is absent.
+      - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
     volumes:
       - target-logs:/app/target/logs
       - event-log:/app/shared_logs
@@ -81,6 +84,7 @@ services:
       - wazuh.manager
     environment:
       - TARGET_BASE_URL=http://target:5000
+      - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
       - OLLAMA_HOST=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
       - BLUE_MAX_ITERATIONS=200

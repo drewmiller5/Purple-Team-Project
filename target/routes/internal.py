@@ -1,5 +1,7 @@
 # target/routes/internal.py
+import hmac
 import ipaddress
+import socket
 import subprocess
 
 from flask import Blueprint, current_app, jsonify, request
@@ -9,8 +11,46 @@ from target.db import get_connection, is_blocked
 internal_bp = Blueprint("internal", __name__, url_prefix="/internal")
 
 
+def _is_authorized_internal_action():
+    expected_token = current_app.config.get("INTERNAL_ACTION_TOKEN")
+    supplied_token = request.headers.get("X-Internal-Action-Token")
+    return bool(expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token))
+
+
+def _protected_source_ips():
+    """Return the target and essential lab peers that must never be blocked."""
+    protected = {"127.0.0.1"}
+    for hostname in ("target", socket.gethostname(), "wazuh.manager", "blue_agent"):
+        try:
+            protected.add(socket.gethostbyname(hostname))
+        except socket.gaierror:
+            continue
+
+    # Docker exposes the bridge gateway as the default route in the target
+    # container. Read it rather than assuming a compose-assigned subnet.
+    try:
+        with open("/proc/net/route", encoding="utf-8") as routes:
+            for route in routes:
+                fields = route.split()
+                if len(fields) >= 3 and fields[1] == "00000000":
+                    protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
+                    break
+    except (OSError, ValueError):
+        pass
+    return protected
+
+
+def _reject_unauthorized_action():
+    if not _is_authorized_internal_action():
+        return jsonify({"error": "internal action authorization required"}), 403
+    return None
+
+
 @internal_bp.route("/lock-account", methods=["POST"])
 def lock_account():
+    unauthorized = _reject_unauthorized_action()
+    if unauthorized:
+        return unauthorized
     username = request.form.get("username", "")
     conn = get_connection(current_app.config["DB_PATH"])
     # Final-review fix (finding #5): bruteforce-guard.sh re-invokes this
@@ -29,6 +69,9 @@ def lock_account():
 
 @internal_bp.route("/kill-session", methods=["POST"])
 def kill_session():
+    unauthorized = _reject_unauthorized_action()
+    if unauthorized:
+        return unauthorized
     user_id = request.form.get("user_id", type=int)
     if user_id is None:
         return jsonify({"error": "user_id is required and must be numeric"}), 400
@@ -41,11 +84,17 @@ def kill_session():
 
 @internal_bp.route("/block-ip", methods=["POST"])
 def block_ip():
+    unauthorized = _reject_unauthorized_action()
+    if unauthorized:
+        return unauthorized
     source_ip = request.form.get("source_ip", "")
     try:
         ipaddress.IPv4Address(source_ip)
     except ValueError:
         return jsonify({"error": "source_ip is required and must be a valid IPv4 address"}), 400
+
+    if source_ip in _protected_source_ips() or ipaddress.IPv4Address(source_ip).is_loopback:
+        return jsonify({"error": "source_ip is protected infrastructure"}), 403
 
     # List-form subprocess.run (never shell=True) -- this is a real,
     # internal-only defensive action, not a seeded vuln like

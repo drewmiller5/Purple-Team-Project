@@ -60,7 +60,7 @@ USER_ID=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.user_id | select(. 
 # AR script's own outcome into that log (Wazuh's compiled AR binaries
 # write to it internally; execd does not capture custom scripts' stdout
 # into it).
-HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://target:5000/internal/kill-session --data-urlencode "user_id=${USER_ID}") || {
+HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://target:5000/internal/kill-session -H "X-Internal-Action-Token: ${INTERNAL_ACTION_TOKEN:?INTERNAL_ACTION_TOKEN is required}" --data-urlencode "user_id=${USER_ID}") || {
     echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: curl request failed for user_id=${USER_ID}" >> /var/ossec/logs/active-responses.log
     exit 1
 }
