@@ -18,6 +18,12 @@ def test_new_empty_memory_rejects_invalid_side():
         new_empty_memory("green")
 
 
+def test_new_empty_memory_accepts_white_side():
+    mem = new_empty_memory("white")
+    assert mem["side"] == "white"
+    assert mem["entries"] == []
+
+
 def test_load_memory_returns_none_when_missing(tmp_path):
     result = load_memory(str(tmp_path / "does_not_exist.json"))
     assert result is None

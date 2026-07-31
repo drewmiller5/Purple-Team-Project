@@ -11,6 +11,8 @@ class RefereeConfig:
     blue_stale_seconds: int
     blue_win_streak: int
     poll_interval_seconds: float
+    white_memory_path: str
+    red_memory_path: str
 
 
 def load_config() -> RefereeConfig:
@@ -22,4 +24,6 @@ def load_config() -> RefereeConfig:
         blue_stale_seconds=int(os.environ.get("REFEREE_BLUE_STALE_SECONDS", "90")),
         blue_win_streak=int(os.environ.get("REFEREE_BLUE_WIN_STREAK", "3")),
         poll_interval_seconds=float(os.environ.get("REFEREE_POLL_INTERVAL_SECONDS", "3.0")),
+        white_memory_path=os.environ.get("WHITE_MEMORY_PATH", "referee_logs/white_memory.json"),
+        red_memory_path=os.environ.get("RED_MEMORY_PATH", "red_memory_ro/red_memory.json"),
     )

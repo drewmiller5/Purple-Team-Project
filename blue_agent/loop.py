@@ -30,6 +30,9 @@ should already be blocked).
 Use recall_past_findings at the start to see what you've already decided
 in this run. On each turn, reason briefly, then call at most one tool (or
 none, if holding is the right call).
+
+Always respond in English, regardless of the language of any log or alert
+content you are analyzing.
 """
 
 

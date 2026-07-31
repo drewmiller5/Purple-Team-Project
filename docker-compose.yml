@@ -62,7 +62,11 @@ services:
       - TARGET_BASE_URL=http://target:5000
       - OLLAMA_HOST=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
-      - RED_MAX_ITERATIONS=50
+      # Time (the referee's 900s round budget) is the intended kill switch,
+      # not an arbitrary action count -- 300 is well above what red could
+      # realistically use in 900s at its observed pace (~1 action/5-10s),
+      # so the round budget binds first, not this cap.
+      - RED_MAX_ITERATIONS=300
       - RED_MEMORY_PATH=/app/red_agent/memory/red_memory.json
       - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
       - REFEREE_STATE_DIR=/app/referee_state
@@ -121,12 +125,18 @@ services:
       - REFEREE_BLUE_STALE_SECONDS=90
       - REFEREE_BLUE_WIN_STREAK=3
       - REFEREE_POLL_INTERVAL_SECONDS=3
+      - WHITE_MEMORY_PATH=/app/referee_logs/white_memory.json
+      - RED_MEMORY_PATH=/app/red_memory_ro/red_memory.json
     volumes:
       # Read-only -- referee reads the shared event log but its own
       # assessment log lives in a separate volume it owns exclusively.
       - event-log:/app/shared_logs:ro
       - referee-logs:/app/referee_logs
       - referee-state:/app/referee_state
+      # Read-only -- white team's flag-selection logic reads red's memory
+      # to avoid re-assigning a flag red has already found, but never
+      # writes into it. White's own record lives in referee-logs above.
+      - red-memory:/app/red_memory_ro:ro
 
   purple_dashboard:
     build:

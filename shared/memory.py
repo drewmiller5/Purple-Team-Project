@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 def new_empty_memory(side: str) -> dict:
-    if side not in ("red", "blue"):
-        raise ValueError(f"side must be 'red' or 'blue', got {side!r}")
+    if side not in ("red", "blue", "white"):
+        raise ValueError(f"side must be 'red', 'blue', or 'white', got {side!r}")
     return {
         "side": side,
         "created_at": datetime.now(timezone.utc).isoformat(),
