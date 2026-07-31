@@ -1,6 +1,14 @@
 FROM python:3.11-slim
+
 WORKDIR /app
-RUN pip install --no-cache-dir flask==3.0.3
-COPY dashboard/app.py /app/app.py
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY dashboard/ dashboard/
+COPY shared/ shared/
+
+ENV PYTHONPATH=/app
 EXPOSE 8080
-CMD ["python", "app.py"]
+
+CMD ["python", "-m", "dashboard.app"]
