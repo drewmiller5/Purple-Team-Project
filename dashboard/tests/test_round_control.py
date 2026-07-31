@@ -42,3 +42,12 @@ def test_restart_round_surfaces_connection_errors_instead_of_raising():
         result = restart_round("http://round_helper:8090", "secret-token")
 
     assert result == {"error": "down"}
+
+
+def test_restart_round_handles_non_2xx_status_codes_safely():
+    with patch("dashboard.round_control.requests.post") as mock_post:
+        mock_post.return_value.status_code = 401
+        mock_post.return_value.text = "Unauthorized"
+        result = restart_round("http://round_helper:8090", "invalid-token")
+
+    assert result == {"error": "Unauthorized"}

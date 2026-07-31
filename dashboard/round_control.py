@@ -22,4 +22,8 @@ def restart_round(helper_url: str, internal_action_token: str) -> dict:
         )
     except requests.RequestException as exc:
         return {"error": str(exc)}
+
+    if not (200 <= response.status_code < 300):
+        return {"error": response.text}
+
     return response.json()
