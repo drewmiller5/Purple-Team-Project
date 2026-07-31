@@ -98,7 +98,11 @@ def create_app() -> Flask:
 
     @app.route("/api/red-action", methods=["POST"])
     def red_action():
-        body = request.get_json(force=True)
+        # or {} alone would mask a falsy-but-non-dict body (JSON `null`/`[]`)
+        # as an empty dict; only treat a truly empty request body that way.
+        body = request.get_json(force=True, silent=True) if request.get_data() else {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
         result = run_red_action(
             app.config["TARGET_BASE_URL"],
             template_name=body.get("template_name"),
@@ -109,7 +113,9 @@ def create_app() -> Flask:
 
     @app.route("/api/blue-action", methods=["POST"])
     def blue_action():
-        body = request.get_json(force=True)
+        body = request.get_json(force=True, silent=True) if request.get_data() else {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
         result = run_blue_action(
             app.config["TARGET_BASE_URL"],
             app.config["INTERNAL_ACTION_TOKEN"],
@@ -121,7 +127,9 @@ def create_app() -> Flask:
 
     @app.route("/api/advisor", methods=["POST"])
     def advisor():
-        body = request.get_json(force=True)
+        body = request.get_json(force=True, silent=True) if request.get_data() else {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
         result = ask_advisor(
             app.config["OLLAMA_HOST"], app.config["OLLAMA_MODEL"], body.get("question", ""),
             app.config["EVENT_LOG_PATH"], app.config["ADVISOR_LOG_PATH"],

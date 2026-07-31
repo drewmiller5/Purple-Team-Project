@@ -48,7 +48,7 @@ def test_round_stop_endpoint_touches_stop_flag(app):
 
 
 def test_round_restart_endpoint_calls_round_helper(app):
-    with patch("dashboard.app.restart_round") as mock_restart:
+    with patch("dashboard.app.restart_round", autospec=True) as mock_restart:
         mock_restart.return_value = {"restarted": ["referee", "red_agent", "blue_agent"]}
         response = app.test_client().post("/api/round/restart", auth=AUTH)
 
@@ -57,7 +57,7 @@ def test_round_restart_endpoint_calls_round_helper(app):
 
 
 def test_red_action_endpoint_delegates_to_run_red_action(app):
-    with patch("dashboard.app.run_red_action") as mock_run:
+    with patch("dashboard.app.run_red_action", autospec=True) as mock_run:
         mock_run.return_value = {"status_code": 200, "body": "ok"}
         response = app.test_client().post("/api/red-action", json={"template_name": "sqli"}, auth=AUTH)
 
@@ -66,7 +66,7 @@ def test_red_action_endpoint_delegates_to_run_red_action(app):
 
 
 def test_blue_action_endpoint_delegates_to_run_blue_action(app):
-    with patch("dashboard.app.run_blue_action") as mock_run:
+    with patch("dashboard.app.run_blue_action", autospec=True) as mock_run:
         mock_run.return_value = {"status_code": 200, "body": "ok"}
         response = app.test_client().post("/api/blue-action", json={"action": "block_ip", "target": "10.0.0.5"}, auth=AUTH)
 
@@ -75,12 +75,19 @@ def test_blue_action_endpoint_delegates_to_run_blue_action(app):
 
 
 def test_advisor_endpoint_delegates_to_ask_advisor(app):
-    with patch("dashboard.app.ask_advisor") as mock_ask:
+    with patch("dashboard.app.ask_advisor", autospec=True) as mock_ask:
         mock_ask.return_value = {"answer": "block it"}
         response = app.test_client().post("/api/advisor", json={"question": "what now?"}, auth=AUTH)
 
     assert response.status_code == 200
     assert response.get_json() == {"answer": "block it"}
+
+
+@pytest.mark.parametrize("route", ["/api/red-action", "/api/blue-action", "/api/advisor"])
+@pytest.mark.parametrize("raw_body", ["null", "[]", '"x"', "42"])
+def test_action_routes_reject_non_dict_json_body(app, route, raw_body):
+    response = app.test_client().post(route, data=raw_body, content_type="application/json", auth=AUTH)
+    assert response.status_code == 400
 
 
 def test_protected_route_without_credentials_returns_401(app):
