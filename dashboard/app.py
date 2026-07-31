@@ -94,7 +94,7 @@ def create_app() -> Flask:
 
     @app.route("/api/round/restart", methods=["POST"])
     def round_restart():
-        return jsonify(restart_round(app.config["ROUND_HELPER_URL"]))
+        return jsonify(restart_round(app.config["ROUND_HELPER_URL"], app.config["INTERNAL_ACTION_TOKEN"]))
 
     @app.route("/api/red-action", methods=["POST"])
     def red_action():

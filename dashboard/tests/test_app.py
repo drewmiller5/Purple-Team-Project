@@ -53,7 +53,7 @@ def test_round_restart_endpoint_calls_round_helper(app):
         response = app.test_client().post("/api/round/restart", auth=AUTH)
 
     assert response.status_code == 200
-    mock_restart.assert_called_once_with("http://round_helper:8090")
+    mock_restart.assert_called_once_with("http://round_helper:8090", "secret-token")
 
 
 def test_red_action_endpoint_delegates_to_run_red_action(app):
