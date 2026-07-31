@@ -27,11 +27,18 @@ BLUE_ACTION_ENDPOINTS = {
     "block_ip": ("/internal/block-ip", "source_ip"),
 }
 
+# Module-level session shared across all calls so a login's Set-Cookie
+# (e.g. bruteforce -> /admin/login) carries over to a later call in the same
+# escalation chain (e.g. command_injection -> /admin/diagnostics), same as
+# red_agent/http_tool.py's HttpTool.session. Fine for a single-operator lab
+# dashboard, not a multi-tenant service (security reviewer signed off).
+_session = requests.Session()
+
 
 def _do_request(base_url: str, method: str, path: str, params=None, data=None, headers=None) -> dict:
     url = f"{base_url.rstrip('/')}{path if path.startswith('/') else '/' + path}"
     try:
-        resp = requests.request(method.upper(), url, params=params, data=data,
+        resp = _session.request(method.upper(), url, params=params, data=data,
                                  headers=headers or {}, timeout=10.0)
     except requests.RequestException as exc:
         return {"error": str(exc)}
@@ -49,7 +56,9 @@ def run_red_action(target_base_url: str, template_name: str = None, raw: dict = 
             return {"error": f"unknown template {template_name}"}
         method, path, params, data = tpl["method"], tpl["path"], tpl["params"], tpl["data"]
     elif raw:
-        method, path = raw["method"], raw["path"]
+        method, path = raw.get("method"), raw.get("path")
+        if not method or not path:
+            return {"error": "raw must include method and path"}
         params, data = raw.get("params"), raw.get("data")
     else:
         return {"error": "template_name or raw is required"}
@@ -74,6 +83,8 @@ def run_blue_action(target_base_url: str, internal_action_token: str, action: st
     endpoint = BLUE_ACTION_ENDPOINTS.get(action)
     if endpoint is None:
         return {"error": f"unknown action {action}"}
+    if target is None:
+        return {"error": "target is required"}
     path, field = endpoint
 
     result = _do_request(

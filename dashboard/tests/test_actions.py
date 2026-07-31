@@ -1,9 +1,28 @@
 import json
+import threading
+import time
 from pathlib import Path
 
+import pytest
 import responses
 
 from dashboard.actions import RED_TEMPLATES, run_blue_action, run_red_action
+from target.app import create_app
+
+
+@pytest.fixture
+def live_target(tmp_path):
+    app = create_app(
+        db_path=str(tmp_path / "test.db"),
+        log_path=str(tmp_path / "requests.jsonl"),
+    )
+    server = threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=15002, use_reloader=False),
+        daemon=True,
+    )
+    server.start()
+    time.sleep(0.3)
+    yield "http://127.0.0.1:15002"
 
 
 @responses.activate
@@ -106,3 +125,20 @@ def test_run_blue_action_rejects_unknown_action(tmp_path):
         event_log_path=str(tmp_path / "events.jsonl"),
     )
     assert "error" in result
+
+
+def test_run_red_action_session_persists_cookie_across_bruteforce_then_command_injection(
+    live_target, tmp_path
+):
+    # Proves the fix: a real login (bruteforce -> /admin/login) sets a
+    # session cookie that must carry over to a later, separate
+    # run_red_action call (command_injection -> /admin/diagnostics), which
+    # is gated on session.get("role") == "admin" (target/routes/diagnostics.py).
+    # Without a persistent session behind _do_request, this second call
+    # always 403s and found_it can never be True for real operators.
+    log_path = str(tmp_path / "events.jsonl")
+
+    run_red_action(live_target, template_name="bruteforce", event_log_path=log_path)
+    result = run_red_action(live_target, template_name="command_injection", event_log_path=log_path)
+
+    assert result["status_code"] == 200
