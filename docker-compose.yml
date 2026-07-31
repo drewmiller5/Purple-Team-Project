@@ -179,6 +179,11 @@ services:
     networks:
       - agent-net
     volumes:
+      # :ro only protects the socket *file* on this mount point -- it does
+      # not narrow the Docker Engine API reachable over it (still full
+      # root-equivalent). The actual scoping is app-level: app.py's
+      # hardcoded ALLOWED_CONTAINERS allowlist + INTERNAL_ACTION_TOKEN auth,
+      # never :ro.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - COMPOSE_PROJECT_DIR=/app
