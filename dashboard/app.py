@@ -244,9 +244,10 @@ function collapseHeartbeats(list) {
 }
 function renderList(el, list, emptyMsg) {
   if (!list.length) { el.innerHTML = `<div class="empty">${emptyMsg}</div>`; return; }
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  el.innerHTML = collapseHeartbeats(list).map(renderEvent).join('');
-  if (atBottom) el.scrollTop = el.scrollHeight;
+  // Collapse runs on the original chronological order, then reverse for
+  // display -- newest first, so the most recent activity is always visible
+  // without scrolling.
+  el.innerHTML = collapseHeartbeats(list).reverse().map(renderEvent).join('');
 }
 
 for (const btn of document.querySelectorAll('nav.tabs button')) {
