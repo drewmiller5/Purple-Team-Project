@@ -176,7 +176,6 @@ def test_blue_decisive_win_ignores_human_actor_red_requests():
 
 
 def test_red_decisive_win_ignores_human_actor_host_access():
-    from datetime import datetime, timezone
     events = [
         {"side": "blue", "phase": "heartbeat", "timestamp": "2026-01-01T00:00:00+00:00"},
         {
