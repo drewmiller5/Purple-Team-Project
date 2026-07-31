@@ -32,10 +32,9 @@ def ask_advisor(ollama_host: str, ollama_model: str, question: str,
             timeout=30.0,
         )
         resp.raise_for_status()
-    except requests.RequestException as exc:
+        answer = resp.json().get("message", {}).get("content", "")
+    except (requests.RequestException, ValueError) as exc:
         return {"error": str(exc)}
-
-    answer = resp.json().get("message", {}).get("content", "")
 
     p = Path(advisor_log_path)
     p.parent.mkdir(parents=True, exist_ok=True)
