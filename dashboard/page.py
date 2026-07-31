@@ -70,9 +70,11 @@ PAGE = """
 
   #found-it-toast {
     position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 6px;
-    background: var(--status-good); color: #fff; font-size: 13px; font-weight: 600; z-index: 10;
+    color: #fff; font-size: 13px; font-weight: 600; z-index: 10;
   }
   #found-it-toast.hidden { display: none; }
+  #found-it-toast.ok { background: var(--status-good); }
+  #found-it-toast.fail { background: var(--status-critical); }
 
   nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--surface-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
   nav.tabs button {
@@ -129,6 +131,7 @@ PAGE = """
   .ev .phase.critical { color: var(--status-critical); }
   .ev .time { color: var(--muted); font-size: 11px; }
   .ev .round-tag { color: var(--muted); font-size: 11px; }
+  .ev .actor-tag { color: var(--text-primary); font-size: 11px; font-weight: 700; }
   .ev .content { white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
   .ev.heartbeat { padding: 3px 0; opacity: .55; }
   .ev.heartbeat .content { font-size: 11px; }
@@ -254,6 +257,21 @@ function unwrapFencedJson(s) {
   if (!m) return s;
   try { return JSON.stringify(JSON.parse(m[1]), null, 2); } catch { return m[1]; }
 }
+// Manual actions (dashboard/actions.py) log a `response` alongside the
+// action name -- {status_code, body} on a completed request, or {error}
+// when the target couldn't be reached at all. Neither is optional: without
+// reading it, "block_ip" renders identically whether the block landed or
+// the target was unreachable. Returns '' + failed:false when there's
+// nothing to report (e.g. non-action events with no response field).
+function actionOutcome(e) {
+  if (!e.response) return { text: '', failed: false };
+  if (e.response.error) return { text: `error: ${e.response.error}`, failed: true };
+  if (e.response.status_code !== undefined) {
+    const ok = e.response.status_code >= 200 && e.response.status_code < 300;
+    return { text: `status ${e.response.status_code}`, failed: !ok };
+  }
+  return { text: '', failed: false };
+}
 // `team` is optional -- when set (combined-ledger tab) adds a colored left
 // border and a RED/BLUE/WHITE chip so a merged feed stays scannable at a
 // glance. Per-team tabs omit it since the tab itself already says who.
@@ -261,16 +279,27 @@ function renderEvent(e, team) {
   const teamClass = team ? ` team-${team}` : '';
   const chip = team ? `<span class="chip chip-${team}">${team.toUpperCase()}</span>` : '';
   const roundTag = (team && e.__round !== undefined) ? `<span class="round-tag">R${e.__round}</span>` : '';
+  // Manual (human-fired) actions are stamped actor: "human" server-side
+  // (dashboard/actions.py) to distinguish them from autonomous agent
+  // events, which carry no actor field at all.
+  const actorTag = e.actor === 'human' ? '<span class="actor-tag">[human]</span>' : '';
   if (e.__collapsed) {
     return `<div class="ev heartbeat${teamClass}">
       <div class="meta">${chip}<span class="phase">heartbeat</span><span class="time">alive, idle -- ${e.count} beats, last at ${esc(localTime(e.timestamp))}</span>${roundTag}</div>
     </div>`;
   }
   const phase = e.phase || 'event';
-  const cls = GOOD_PHASES.has(phase) ? 'good' : CRITICAL_PHASES.has(phase) ? 'critical' : '';
+  const outcome = actionOutcome(e);
+  const cls = outcome.failed ? 'critical' : GOOD_PHASES.has(phase) ? 'good' : CRITICAL_PHASES.has(phase) ? 'critical' : '';
   const narrator = NARRATIVE[phase];
-  let content = e.content || e.action || e.reasoning || e.error;
+  let content = e.content || e.reasoning || e.error;
   if (content) content = unwrapFencedJson(content);
+  // e.action (e.g. "block_ip") is always truthy on its own -- if it were
+  // checked before outcome, a failed escalation would render identically
+  // to a successful one. Fold the outcome into the same line instead.
+  if (!content && e.action) {
+    content = outcome.text ? `${e.action}${e.target ? ' -> ' + e.target : ''} (${outcome.text})` : e.action;
+  }
   let isNarrative = false;
   if (!content && narrator) { content = narrator(e); isNarrative = true; }
   if (!content) {
@@ -279,7 +308,7 @@ function renderEvent(e, team) {
   }
   const isHeartbeat = HEARTBEAT_PHASES.has(phase);
   return `<div class="ev${isHeartbeat ? ' heartbeat' : ''}${isNarrative ? ' narrative' : ''}${teamClass}">
-    <div class="meta">${chip}<span class="phase ${cls}">${esc(phase)}</span><span class="time">${esc(localTime(e.timestamp))}</span>${roundTag}</div>
+    <div class="meta">${chip}<span class="phase ${cls}">${esc(phase)}</span>${actorTag}<span class="time">${esc(localTime(e.timestamp))}</span>${roundTag}</div>
     ${content ? `<div class="content">${esc(content).slice(0,2000)}</div>` : ''}
   </div>`;
 }
@@ -384,10 +413,10 @@ document.getElementById('btn-start').addEventListener('click', () => fetch('/api
 document.getElementById('btn-stop').addEventListener('click', () => fetch('/api/round/stop', { method: 'POST' }).then(tick));
 document.getElementById('btn-restart').addEventListener('click', () => fetch('/api/round/restart', { method: 'POST' }).then(tick));
 
-function showFoundItToast(side) {
+function showToast(message, ok) {
   const toast = document.getElementById('found-it-toast');
-  toast.textContent = `Found it! Your ${side} action reproduced a win-condition result.`;
-  toast.className = '';
+  toast.textContent = message;
+  toast.className = ok ? 'ok' : 'fail';
   setTimeout(() => { toast.className = 'hidden'; }, 4000);
 }
 
@@ -399,7 +428,8 @@ document.getElementById('red-template-form').addEventListener('submit', async (e
     body: JSON.stringify({ template_name }),
   });
   const data = await res.json();
-  if (data.found_it) showFoundItToast('red');
+  if (data.found_it) showToast('Found it! Your red action reproduced a win-condition result.', true);
+  else if (data.error) showToast(`Red action failed: ${data.error}`, false);
   tick();
 });
 document.getElementById('blue-action-form').addEventListener('submit', async (ev) => {
@@ -410,7 +440,8 @@ document.getElementById('blue-action-form').addEventListener('submit', async (ev
     body: JSON.stringify({ action: fd.get('action'), target: fd.get('target') }),
   });
   const data = await res.json();
-  if (data.found_it) showFoundItToast('blue');
+  if (data.found_it) showToast('Found it! Your blue action reproduced a win-condition result.', true);
+  else if (data.error) showToast(`Blue action failed: ${data.error}`, false);
   tick();
 });
 document.getElementById('advisor-form').addEventListener('submit', async (ev) => {
