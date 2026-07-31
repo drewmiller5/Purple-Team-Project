@@ -1,6 +1,13 @@
 from datetime import datetime
 
 
+def _agent_events(events: list) -> list:
+    """Exclude human-tagged events from autonomous win-condition scans --
+    a human manually reproducing a win-condition pattern during a live
+    round must never silently end that round."""
+    return [e for e in events if e.get("actor") != "human"]
+
+
 def has_blue_heartbeat(events: list) -> bool:
     # go.flag is gated on this alone -- red_agent's own _wait_for_go is a
     # free rider on blue's heartbeat, not anything red does itself (red has
@@ -8,7 +15,7 @@ def has_blue_heartbeat(events: list) -> bool:
     # "both agents ready" condition, red_agent/loop.py needs its own
     # unconditional pre-wait heartbeat-equivalent event first, or the same
     # deadlock blue_agent/loop.py had (fixed 2026-07-27) reappears for red.
-    return any(e.get("side") == "blue" for e in events)
+    return any(e.get("side") == "blue" for e in _agent_events(events))
 
 
 def red_has_host_access(events: list) -> bool:
@@ -17,7 +24,7 @@ def red_has_host_access(events: list) -> bool:
         and e.get("phase") == "http_request"
         and e.get("request", {}).get("path") == "/admin/diagnostics"
         and e.get("response", {}).get("status_code") == 200
-        for e in events
+        for e in _agent_events(events)
     )
 
 
@@ -27,7 +34,7 @@ def blue_decisive_win(events: list, streak_threshold: int) -> bool:
     if not has_blue_heartbeat(events):
         return False
 
-    red_requests = [e for e in events if e.get("side") == "red" and e.get("phase") == "http_request"]
+    red_requests = [e for e in _agent_events(events) if e.get("side") == "red" and e.get("phase") == "http_request"]
     if len(red_requests) < streak_threshold:
         return False
 
@@ -64,7 +71,7 @@ def red_decisive_win(events: list, now: datetime, stale_seconds: float) -> bool:
         return False
 
     blue_timestamps = [
-        ts for ts in (_parse_timestamp(e) for e in events if e.get("side") == "blue")
+        ts for ts in (_parse_timestamp(e) for e in _agent_events(events) if e.get("side") == "blue")
         if ts is not None
     ]
     if not blue_timestamps:

@@ -159,3 +159,30 @@ def test_blue_decisive_win_false_when_response_is_a_string():
         {"side": "red", "phase": "http_request", "response": "unexpected string"},
     ] * 3
     assert blue_decisive_win(events, streak_threshold=3) is False
+
+
+def test_has_blue_heartbeat_ignores_human_actor_events():
+    events = [{"side": "blue", "actor": "human", "phase": "heartbeat"}]
+    assert has_blue_heartbeat(events) is False
+
+
+def test_blue_decisive_win_ignores_human_actor_red_requests():
+    events = [{"side": "blue", "phase": "heartbeat"}]
+    events += [
+        {"side": "red", "actor": "human", "phase": "http_request", "response": {"status_code": 403}}
+        for _ in range(3)
+    ]
+    assert blue_decisive_win(events, streak_threshold=3) is False
+
+
+def test_red_decisive_win_ignores_human_actor_host_access():
+    from datetime import datetime, timezone
+    events = [
+        {"side": "blue", "phase": "heartbeat", "timestamp": "2026-01-01T00:00:00+00:00"},
+        {
+            "side": "red", "actor": "human", "phase": "http_request",
+            "request": {"path": "/admin/diagnostics"}, "response": {"status_code": 200},
+        },
+    ]
+    now = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    assert red_decisive_win(events, now, stale_seconds=1) is False
