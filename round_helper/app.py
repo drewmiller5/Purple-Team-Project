@@ -1,6 +1,8 @@
+import hmac
+import os
 import subprocess
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 # Real container names (docker-compose.yml's container_name: values), not
 # compose service names -- `docker start` operates on the container, and
@@ -12,9 +14,16 @@ ALLOWED_CONTAINERS = ["purple-lab-referee", "purple-lab-red", "purple-lab-blue"]
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")
 
     @app.route("/restart-round", methods=["POST"])
     def restart_round():
+        expected_token = app.config.get("INTERNAL_ACTION_TOKEN")
+        supplied_token = request.headers.get("X-Internal-Action-Token")
+
+        if not (expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token)):
+            return jsonify({"error": "unauthorized"}), 401
+
         result = subprocess.run(
             ["docker", "start", *ALLOWED_CONTAINERS],
             capture_output=True, text=True, timeout=60,
