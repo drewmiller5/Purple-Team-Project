@@ -160,6 +160,7 @@ services:
       - REFEREE_STATE_DIR=/app/referee_state
       - TARGET_BASE_URL=http://target:5000
       - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
+      - DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:?set DASHBOARD_AUTH_TOKEN before starting the lab}
       - ROUND_HELPER_URL=http://round_helper:8090
       - OLLAMA_HOST=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
