@@ -81,7 +81,12 @@ def test_run_declares_blue_win_when_streak_and_heartbeat_present(tmp_path):
 def test_run_ignores_events_left_over_from_a_prior_round(tmp_path):
     """The prior round's tail events (e.g. blue's winning streak) must not
     let a brand new round conclude before this round's agents ever act."""
-    config = _config(tmp_path, max_round_seconds=999, blue_win_streak=3)
+    # max_round_seconds is real wall-clock time in run()'s while-loop (no
+    # clock mocking in this test module) -- this test's whole point is to
+    # reach budget_expired, so the value must be small, not "large enough
+    # to not matter" (999 previously made this test block for ~999 real
+    # seconds).
+    config = _config(tmp_path, max_round_seconds=0.05, blue_win_streak=3)
 
     # Simulate a completed prior round: blue heartbeat + a blocked streak
     # that would satisfy blue_decisive_win on its own.
