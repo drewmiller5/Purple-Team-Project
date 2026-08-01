@@ -238,7 +238,7 @@ PAGE = """
   <h1>Purple Team Live View</h1>
   <div class="spacer"></div>
   <div class="round-controls">
-    <button id="btn-start" class="ctrl-go">Start Round</button>
+    <button id="btn-start" class="ctrl-go">Clear Flags</button>
     <button id="btn-stop" class="ctrl-stop">Stop Round</button>
     <button id="btn-restart">Restart Round</button>
   </div>

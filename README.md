@@ -22,11 +22,21 @@ See `docs/design.md` for the full spec.
 
 Requires `INTERNAL_ACTION_TOKEN` set (shared secret authenticating `target`'s
 internal defensive endpoints against `blue_agent` and Wazuh's active-response
-scripts; no default, the stack fails closed without it). Copy
-`.env.example` to `.env` and fill in a random value, or export it directly:
+scripts; no default, the stack fails closed without it) and
+`DASHBOARD_AUTH_TOKEN` set (password for the dashboard's HTTP Basic Auth,
+username hardcoded as `operator`; also no default). Copy `.env.example` to
+`.env` and fill in random values, or export them directly:
 
     cp .env.example .env   # then edit .env
     docker compose up --build
+
+### Dashboard (host port 8080)
+
+The human-operable dashboard is served on `http://localhost:8080`, behind
+reusable plaintext HTTP Basic Auth (no TLS). That's an acceptable trade-off
+for a local, single-operator lab -- it grants real attack-firing and
+container-restart capability -- but the port should never be bound to a
+routable or non-localhost interface.
 
 ## What's built (Phase 1: Target Range + Core Infrastructure)
 

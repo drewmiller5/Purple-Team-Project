@@ -326,6 +326,15 @@ networks:
     # reach Ollama running on the host. The target container is never
     # attached to this network; that's what preserves the egress-block
     # guarantee verified for lab-net.
+    #
+    # INVARIANT: `target` must never be added to agent-net (or otherwise
+    # bridged to round_helper). INTERNAL_ACTION_TOKEN is shared between
+    # target's internal routes and round_helper's container-restart control
+    # plane, and target is considered compromised-by-design (it's the
+    # deliberately RCE-able host) — this network segmentation is the only
+    # thing preventing a stolen copy of that token from reaching
+    # round_helper. Splitting the token into two separate secrets is
+    # deferred to before-public-release, not fixed here.
 
 volumes:
   target-logs:

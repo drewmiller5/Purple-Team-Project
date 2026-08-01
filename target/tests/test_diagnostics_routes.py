@@ -1,4 +1,8 @@
 # target/tests/test_diagnostics_routes.py
+import os
+
+import pytest
+
 from target.app import create_app
 
 
@@ -23,6 +27,12 @@ def test_diagnostics_runs_ping_for_authenticated_admin(tmp_path):
     assert response.status_code == 200
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="relies on POSIX shell `;` command-separator behavior via shell=True; "
+    "doesn't hold under Windows cmd.exe. Passes in the lab's real Linux/container "
+    "environment.",
+)
 def test_seeded_command_injection_in_diagnostics(tmp_path):
     """Seeded vulnerability regression test: /admin/diagnostics shells out
     to `ping` with unsanitized input via shell=True, allowing arbitrary
