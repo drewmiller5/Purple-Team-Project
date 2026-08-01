@@ -38,6 +38,23 @@ for a local, single-operator lab -- it grants real attack-firing and
 container-restart capability -- but the port should never be bound to a
 routable or non-localhost interface.
 
+## Security notes
+
+- The Wazuh indexer/API/dashboard credentials in `docker-compose.yml`
+  (`SecretPassword`, `kibanaserver`/`kibanaserver`, etc.) are upstream
+  [`wazuh-docker`](https://github.com/wazuh/wazuh-docker)'s own documented
+  single-node demo defaults, not a leak of a real secret -- same rationale as
+  `wazuh/config/wazuh_indexer_ssl_certs/README.md` for the TLS certs in that
+  directory. Left as-is (not rotated) for this publish; rotating them and
+  segmenting `red_agent` off the SIEM's own management network is tracked as
+  finding H7 in `docs/superpowers/plans/2026-07-28-plan-3c-findings-ledger.md`,
+  worked in public post-publish along with the rest of that ledger.
+- `target/app.py`'s three seeded vulnerabilities (below) are intentional --
+  that's the point of the lab. Findings that were *not* intentional (a
+  hardcoded Flask session key, unsanitized alert data reaching the blue
+  agent's LLM context) are fixed; see the findings ledger for the full,
+  transparently-tracked list of what's fixed vs. still open.
+
 ## What's built (Phase 1: Target Range + Core Infrastructure)
 
 - `target/` — Flask app with three intentionally-seeded vulnerabilities:

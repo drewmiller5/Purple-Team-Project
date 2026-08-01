@@ -242,6 +242,9 @@ services:
     environment:
       - INDEXER_URL=https://wazuh.indexer:9200
       - INDEXER_USERNAME=admin
+      # Upstream wazuh-docker demo default, not a leaked secret -- see
+      # README.md "Security notes" and ledger finding H7 for the tracked
+      # rotate+segment follow-up.
       - INDEXER_PASSWORD=SecretPassword
       - FILEBEAT_SSL_VERIFICATION_MODE=full
       - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
@@ -301,6 +304,8 @@ services:
       - "443:5601"
     environment:
       - INDEXER_USERNAME=admin
+      # Upstream wazuh-docker demo defaults, not leaked secrets -- see
+      # README.md "Security notes" and ledger finding H7.
       - INDEXER_PASSWORD=SecretPassword
       - WAZUH_API_URL=https://wazuh.manager
       - DASHBOARD_USERNAME=kibanaserver
