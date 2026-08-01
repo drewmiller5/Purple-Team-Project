@@ -1,9 +1,9 @@
 <!--
-  target_rules.xml -- Wazuh native XML rules for the purple-lab `target` app.
+  target_rules.xml — Wazuh native XML rules for the purple-lab `target` app.
 
   Hand-written translation of the 4 Sigma rules in docs/sigma-rules/*.yml
   (Task 4). NOT machine-generated: no working `sigma-cli` Wazuh backend
-  exists (verified -- see Task 5 report: pysigma-backend-wazuh is not on
+  exists (verified — see Task 5 report: pysigma-backend-wazuh is not on
   PyPI, is not in `sigma plugin list`'s registry, and is tracked only as
   an open, unimplemented feature request in SigmaHQ/pySigma discussion
   #257 / SigmaHQ/pySigma-plugin-directory discussion #52).
@@ -14,12 +14,12 @@
   hand-writing these rules directly, testing via `wazuh-logtest` proved
   the opposite problem: Wazuh's own rule-matching engine addresses
   JSON-decoder dynamic fields WITHOUT the `data.` prefix (e.g. `path`,
-  `query_params.q`, `remote_addr`, `form_params.host`) -- that prefix is
+  `query_params.q`, `remote_addr`, `form_params.host`) — that prefix is
   added only by analysisd when *serializing* matched events into
   alerts.json/archives.json output, not in the internal field namespace
   `<field name="...">` matches against. Rules written with `data.`-
   prefixed field names compiled and loaded with no XML errors but
-  silently never matched -- confirmed by isolating the base rule (which
+  silently never matched — confirmed by isolating the base rule (which
   matched fine) from each child field condition (which did not) via
   repeated wazuh-logtest runs. All field references below are therefore
   UNPREFIXED, verified against the real running manager.
@@ -37,7 +37,7 @@
   rules are evaluated and internally tracked for frequency/if_matched_sid
   correlation but are never written to alerts.log/alerts.json themselves.
   This mirrors Wazuh's own shipped ruleset idiom for brute-force detection
-  (e.g. 0580-win-security_rules.xml rule 60204, T1110) -- only the
+  (e.g. 0580-win-security_rules.xml rule 60204, T1110) — only the
   aggregating rule that crosses the threshold actually alerts.
 
   Sigma's non-standard `count() by <field> >= N` aggregation syntax used
@@ -51,21 +51,21 @@
   aws.httpRequest.clientIp`). `<same_source_ip/>` was considered but
   rejected: it keys off Wazuh's built-in `srcip` dynamic field, which the
   generic `json` decoder never populates (it has no concept that
-  `remote_addr` means source IP) -- confirmed by inspecting
+  `remote_addr` means source IP) — confirmed by inspecting
   /var/ossec/ruleset/decoders/0006-json_decoders.xml, which is a bare
   plugin_decoder with no field-role mapping. `<same_field>remote_addr</same_field>`
   is the correct, verified mechanism for this log source.
 
   ============================================================================
-  TASK 8 UPDATE -- native frequency/if_matched_sid correlation never fires
+  TASK 8 UPDATE — native frequency/if_matched_sid correlation never fires
   ============================================================================
   Despite everything above being verified correct (base rules match every
   event, field names are right, same_field is the right primitive), rules
   100104 and 100106 were extensively investigated live (via wazuh-logtest,
   real traffic through the full stack, structural diffing against Wazuh's
-  own shipped working example for the exact same idiom --
+  own shipped working example for the exact same idiom —
   0580-win-security_rules.xml rule 60204/60205, which is structurally
-  identical to 100103/100104 here -- and a maximally minimal zero-field-
+  identical to 100103/100104 here — and a maximally minimal zero-field-
   condition if_matched_sid test rule against our own base rule) and NEVER
   fire. All plausible hypotheses were refuted with concrete evidence. This
   is a real Wazuh 4.9.2 behavior/environment issue, not a rule-authoring
@@ -82,11 +82,11 @@
 
   This required base rules 100103/100105 to move off level="0": Active
   Response only dispatches off of real alerts, and level-0 rules are
-  evaluated for internal correlation bookkeeping only -- they are never
+  evaluated for internal correlation bookkeeping only — they are never
   written to alerts.json and never trigger AR (confirmed against Wazuh 4.9
   docs/behavior before choosing this over any level-0-AR-binding
   alternative, which Wazuh does not support). Both base rules are now
-  level="3" -- a real but low-severity alert fires on every single
+  level="3" — a real but low-severity alert fires on every single
   attempt, and the custom AR script decides internally whether the actual
   threshold (5 in the original window) has been crossed before doing
   anything for real. See wazuh/config/wazuh_cluster/wazuh_manager.conf's
@@ -149,7 +149,7 @@
     <group>bruteforce_login_base,</group>
   </rule>
 
-  <!-- Task 8: never fires (see file header) -- native if_matched_sid/
+  <!-- Task 8: never fires (see file header) — native if_matched_sid/
        frequency correlation on Wazuh 4.9.2 does not dispatch this rule
        despite 100103 matching every event. Kept for documentation of the
        original Sigma-derived intent (threshold, window, MITRE mapping)
@@ -159,7 +159,7 @@
   <rule id="100104" level="10" frequency="5" timeframe="120">
     <if_matched_sid>100103</if_matched_sid>
     <same_field>remote_addr</same_field>
-    <description>Repeated admin login attempts: 5+ POSTs to /admin/login from the same source within 120s -- possible brute force (Sigma: 3d2e1f0a-4b5c-6d7e-8f9a-0b1c2d3e4f5a)</description>
+    <description>Repeated admin login attempts: 5+ POSTs to /admin/login from the same source within 120s — possible brute force (Sigma: 3d2e1f0a-4b5c-6d7e-8f9a-0b1c2d3e4f5a)</description>
     <mitre>
       <id>T1110</id>
     </mitre>
@@ -179,7 +179,7 @@
     <group>idor_probe_base,</group>
   </rule>
 
-  <!-- Task 8: never fires (see file header) -- same native-correlation
+  <!-- Task 8: never fires (see file header) — same native-correlation
        failure as 100104. Kept for documentation of the original
        Sigma-derived intent only. NOT bound to any Active Response;
        idor-guard.sh (bound to 100105 above) replicates this rule's

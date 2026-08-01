@@ -14,7 +14,7 @@ trusts this CA, and this repo has no configured git remote, so there is no
 live exposure from these files being present in version control.
 
 They're committed (rather than gitignored) because Task 2 of the
-[Wazuh detection-layer plan](../../../docs/superpowers/plans/2026-07-26-wazuh-detection-layer.md)
+[Wazuh detection-layer plan](../../../docs/ledger/plans/2026-07-26-wazuh-detection-layer.md)
 found individual-file cert mounts (as opposed to mounting the whole
 directory) to be the reliable approach for this project's `docker-compose.yml`
 -- see that plan's Task 2 notes. Regenerating and recommitting is the

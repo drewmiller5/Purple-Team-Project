@@ -47,7 +47,7 @@ routable or non-localhost interface.
   `wazuh/config/wazuh_indexer_ssl_certs/README.md` for the TLS certs in that
   directory. Left as-is (not rotated) for this publish; rotating them and
   segmenting `red_agent` off the SIEM's own management network is tracked as
-  finding H7 in `docs/superpowers/plans/2026-07-28-plan-3c-findings-ledger.md`,
+  finding H7 in `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`,
   worked in public post-publish along with the rest of that ledger.
 - `target/app.py`'s three seeded vulnerabilities (below) are intentional --
   that's the point of the lab. Findings that were *not* intentional (a
@@ -61,6 +61,11 @@ routable or non-localhost interface.
   SQLi in `/search`, weak/default admin creds + no lockout on
   `/admin/login`, and IDOR on `/documents/<id>`. Every seeded vuln has a
   regression test proving it's exploitable.
+- `wazuh-rules/target_rules.xml` — the Wazuh detection rules for the
+  vulnerabilities above; see `docs/detection-rules.md` for a readable
+  writeup of what each rule does and why two of them are intentionally
+  defined but never fire (Wazuh's own correlation limitation, worked
+  around at the Active Response layer instead).
 - `shared/memory.py`, `shared/event_log.py` — the persistence layer the
   red and blue agents (Plans 2 and 3) will both build on.
 - `scripts/capture_checkpoint.py` — snapshots memory + event log into
