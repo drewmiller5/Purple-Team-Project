@@ -7,81 +7,127 @@ PAGE = """
 <style>
   :root {
     color-scheme: dark;
-    --page-plane:     #0d0d0d;
-    --surface-1:      #1a1a19;
-    --surface-2:      #202020;
-    --text-primary:   #ffffff;
+    /* Dark OLED "live ops board": a deep near-black plane with elevated
+       surfaces stacked on top. Depth comes from surface steps + hairline
+       borders, not shadows -- keeps white emission low and the wire legible. */
+    --page-plane:     #08080a;
+    --surface-1:      #131316;
+    --surface-2:      #1b1b1f;
+    --surface-3:      #26262b;
+    --text-primary:   #f4f4f2;
     --text-secondary: #c3c2b7;
-    --muted:          #898781;
-    --gridline:       #2c2c2a;
-    --border:         rgba(255,255,255,0.10);
+    --muted:          #86847d;
+    --gridline:       #2a2a2e;
+    --border:         rgba(255,255,255,0.09);
+    --border-strong:  rgba(255,255,255,0.16);
     --series-red:     #e66767;
-    --series-blue:    #3987e5;
-    --series-white:   #c98500;
-    --status-good:     #0ca30c;
-    --status-critical: #d03b3b;
-    --status-muted:    #898781;
+    --series-blue:    #4a92e8;
+    --series-white:   #d99a1c;
+    --status-good:     #2bb24c;
+    --status-critical: #e0483f;
+    --status-muted:    #86847d;
     --font-ui:   system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    /* Type scale (px): xs 11 / sm 12 / base 13 / md 15 / lg 18 / xl 22 */
+    /* Spacing rhythm: 4 / 8 / 12 / 16 / 20 / 24 on an 8px base */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+    --radius: 8px; --radius-sm: 5px;
   }
   * { box-sizing: border-box; }
   body {
     background: var(--page-plane); color: var(--text-secondary);
     font-family: var(--font-ui);
+    font-size: 13px; line-height: 1.5;
     margin: 0; height: 100vh; display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
   /* Event stream reads as a live log console -- monospace on the data
      itself (timestamps, phase tags, content), UI chrome stays on the
      regular face. Keeps the two registers -- "controls" vs "wire" --
      visually distinct at a glance. */
   button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
-    outline: 2px solid var(--text-primary); outline-offset: 2px;
+    outline: 2px solid var(--series-blue); outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
   }
 
+  /* --- Command bar -------------------------------------------------- */
   header {
-    padding: 14px 24px; background: var(--surface-1); border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+    padding: var(--sp-3) var(--sp-6); background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: var(--sp-4); flex-shrink: 0;
   }
-  header h1 { font-size: 15px; margin: 0; color: var(--text-primary); font-weight: 600; letter-spacing: .01em; }
+  header h1 {
+    font-size: 15px; margin: 0; color: var(--text-primary); font-weight: 700;
+    letter-spacing: .02em; display: flex; align-items: center; gap: var(--sp-2);
+  }
+  header h1::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--series-blue);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--series-blue) 70%, transparent);
+  }
   .spacer { flex: 1; }
+  .round-controls { display: flex; gap: var(--sp-2); }
   header button {
-    background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border);
-    border-radius: 4px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
+    background: var(--surface-2); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 14px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background .16s ease, color .16s ease, border-color .16s ease;
   }
-  header button:hover { color: var(--text-primary); }
+  header button:hover { color: var(--text-primary); background: var(--surface-3); border-color: var(--border-strong); }
+  header button.ctrl-go:hover    { border-color: color-mix(in srgb, var(--status-good) 55%, transparent); color: var(--status-good); }
+  header button.ctrl-stop:hover  { border-color: color-mix(in srgb, var(--status-critical) 55%, transparent); color: var(--status-critical); }
 
   .badge {
-    padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
-    display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent;
+    padding: 5px 12px; border-radius: 999px; font-size: 11px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent;
   }
   .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
   .badge.go       { color: var(--status-good);     background: color-mix(in srgb, var(--status-good) 14%, transparent);     border-color: color-mix(in srgb, var(--status-good) 40%, transparent); }
-  .badge.go .dot  { background: var(--status-good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-good) 25%, transparent); }
+  .badge.go .dot  { background: var(--status-good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-good) 25%, transparent); animation: pulse 2s ease-in-out infinite; }
   .badge.stop     { color: var(--status-critical); background: color-mix(in srgb, var(--status-critical) 14%, transparent); border-color: color-mix(in srgb, var(--status-critical) 40%, transparent); }
   .badge.stop .dot{ background: var(--status-critical); }
   .badge.idle     { color: var(--status-muted); background: color-mix(in srgb, var(--status-muted) 12%, transparent); border-color: var(--border); }
   .badge.idle .dot{ background: var(--status-muted); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 
-  #result-banner { padding: 8px 24px; font-size: 13px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  /* --- Result banner: a prominent callout, not a text line ---------- */
+  #result-banner {
+    padding: var(--sp-3) var(--sp-6); font-size: 13px; font-weight: 600;
+    background: var(--surface-2); border-bottom: 1px solid var(--border);
+    border-left: 4px solid var(--status-muted);
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  #result-banner::before {
+    content: "LAST ROUND"; font-family: var(--font-ui);
+    font-size: 10px; font-weight: 700; letter-spacing: .08em;
+    color: var(--muted); padding: 2px 8px; border-radius: 999px;
+    background: var(--page-plane); border: 1px solid var(--border); flex-shrink: 0;
+  }
   #result-banner.hidden { display: none; }
-  #result-banner.good { color: var(--status-good); }
-  #result-banner.critical { color: var(--status-critical); }
-  #result-banner.muted { color: var(--status-muted); }
+  #result-banner.good     { color: var(--status-good);     border-left-color: var(--status-good); }
+  #result-banner.critical { color: var(--status-critical); border-left-color: var(--status-critical); }
+  #result-banner.muted    { color: var(--text-secondary);  border-left-color: var(--status-muted); }
 
   #found-it-toast {
-    position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 6px;
-    color: #fff; font-size: 13px; font-weight: 600; z-index: 10;
+    position: fixed; bottom: var(--sp-5); right: var(--sp-5); padding: 13px 20px;
+    border-radius: var(--radius); color: #fff; font-size: 13px; font-weight: 600; z-index: 100;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.14);
   }
   #found-it-toast.hidden { display: none; }
-  #found-it-toast.ok { background: var(--status-good); }
-  #found-it-toast.fail { background: var(--status-critical); }
+  #found-it-toast.ok   { background: var(--status-good);     box-shadow: 0 8px 28px color-mix(in srgb, var(--status-good) 35%, transparent); }
+  #found-it-toast.fail { background: var(--status-critical); box-shadow: 0 8px 28px color-mix(in srgb, var(--status-critical) 35%, transparent); }
 
-  nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--surface-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  /* --- Tabs --------------------------------------------------------- */
+  nav.tabs { display: flex; gap: 2px; padding: 0 var(--sp-5); background: var(--surface-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
   nav.tabs button {
     appearance: none; background: none; border: none; cursor: pointer;
     color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
-    padding: 12px 16px 11px; display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px 11px; display: flex; align-items: center; gap: 8px;
     border-bottom: 2px solid transparent; letter-spacing: .01em;
+    transition: color .16s ease, background .16s ease;
   }
   nav.tabs button .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   nav.tabs button:hover { color: var(--text-secondary); background: rgba(255,255,255,0.03); }
@@ -89,59 +135,95 @@ PAGE = """
   nav.tabs button[data-team="red"].active      { border-bottom-color: var(--series-red); }
   nav.tabs button[data-team="blue"].active     { border-bottom-color: var(--series-blue); }
   nav.tabs button[data-team="white"].active    { border-bottom-color: var(--series-white); }
+  nav.tabs button[data-team="advisor"].active  { border-bottom-color: var(--text-primary); }
   nav.tabs button[data-team="combined"].active { border-bottom-color: var(--text-primary); }
   .dot.red   { background: var(--series-red); }
   .dot.blue  { background: var(--series-blue); }
   .dot.white { background: var(--series-white); }
   .dot.combined { background: conic-gradient(var(--series-red) 0 33%, var(--series-blue) 33% 66%, var(--series-white) 66% 100%); }
 
+  /* --- Panels ------------------------------------------------------- */
   main { flex: 1; min-height: 0; position: relative; }
-  .panel { position: absolute; inset: 0; overflow-y: auto; padding: 20px 28px; display: none; }
+  .panel { position: absolute; inset: 0; overflow-y: auto; padding: var(--sp-5) var(--sp-6); display: none; }
   .panel.active { display: block; }
-  .empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+  .empty { color: var(--muted); font-size: 13px; padding: var(--sp-6) 0; text-align: center; }
 
-  form.action-form { display: flex; flex-direction: column; gap: 8px; max-width: 480px; margin-bottom: 20px; }
-  form.action-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  /* Section label above a feed */
+  .feed-title, .card-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 0 0 var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .feed-title { margin-top: var(--sp-5); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--gridline); }
+
+  /* Cards wrap the interactive controls so they read as a distinct
+     "operator console" register above the live wire. */
+  .panel-grid { display: grid; grid-template-columns: minmax(320px, 480px) minmax(280px, 1fr); gap: var(--sp-4); align-items: start; }
+  @media (max-width: 860px) { .panel-grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--sp-4);
+  }
+
+  form.action-form { display: flex; flex-direction: column; gap: var(--sp-3); }
+  form.action-form label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   form.action-form select, form.action-form input {
     background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border);
-    border-radius: 4px; padding: 7px 9px; font: inherit; font-size: 13px;
+    border-radius: var(--radius-sm); padding: 9px 11px; font: inherit; font-size: 13px;
+    transition: border-color .16s ease;
   }
+  form.action-form select:hover, form.action-form input:hover { border-color: var(--border-strong); }
   form.action-form button {
-    align-self: flex-start; background: var(--surface-2); color: var(--text-primary);
-    border: 1px solid var(--border); border-radius: 4px; padding: 7px 16px; font: inherit;
-    font-size: 13px; cursor: pointer;
+    align-self: flex-start; margin-top: var(--sp-1);
+    background: var(--surface-3); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 9px 20px; font: inherit;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .16s ease, border-color .16s ease;
   }
-  form.action-form button:hover { border-color: var(--text-secondary); }
-  #advisor-answer { white-space: pre-wrap; margin-top: 12px; max-width: 720px; font-size: 13px; line-height: 1.5; }
+  form.action-form button:hover { background: color-mix(in srgb, var(--series-blue) 22%, var(--surface-3)); border-color: var(--series-blue); }
+  #advisor-answer {
+    white-space: pre-wrap; margin-top: var(--sp-4); max-width: 760px; font-size: 13px; line-height: 1.6;
+    font-family: var(--font-mono); color: var(--text-secondary);
+  }
+  #advisor-answer:not(:empty) { padding: var(--sp-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
 
-  .combined-controls { margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  /* --- Attack-frequency view (client-side tally of red actions) ----- */
+  .freq { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .freq-row { display: grid; grid-template-columns: 128px 1fr 30px; align-items: center; gap: var(--sp-3); font-family: var(--font-mono); font-size: 12px; }
+  .freq-label { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .freq-track { height: 8px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+  .freq-fill { display: block; height: 100%; background: var(--series-red); border-radius: 999px; transition: width .3s ease; }
+  .freq-count { color: var(--text-primary); font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .combined-controls { margin-bottom: var(--sp-4); display: flex; align-items: center; gap: var(--sp-2); font-size: 12px; }
+  .combined-controls label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
   .combined-controls select {
     background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border);
-    border-radius: 4px; padding: 6px 9px; font: inherit; font-size: 12px;
+    border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 12px;
   }
 
-  .ev { padding: 12px 0; border-bottom: 1px solid var(--gridline); max-width: 900px; font-family: var(--font-mono); }
-  .ev:first-child { padding-top: 0; }
-  .ev .meta { display: flex; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+  /* --- Event feed (the wire) ---------------------------------------- */
+  .ev { padding: var(--sp-3) 0; border-bottom: 1px solid var(--gridline); max-width: 940px; font-family: var(--font-mono); }
+  .ev .meta { display: flex; align-items: baseline; gap: 10px; margin-bottom: 5px; flex-wrap: wrap; }
   .ev .phase {
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
     color: var(--muted);
   }
   .ev .phase.good { color: var(--status-good); }
   .ev .phase.critical { color: var(--status-critical); }
-  .ev .time { color: var(--muted); font-size: 11px; }
-  .ev .round-tag { color: var(--muted); font-size: 11px; }
-  .ev .actor-tag { color: var(--text-primary); font-size: 11px; font-weight: 700; }
+  .ev .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ev .round-tag { color: var(--muted); font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; }
+  .ev .actor-tag { color: var(--series-white); font-size: 11px; font-weight: 700; }
   .ev .content { white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
-  .ev.heartbeat { padding: 3px 0; opacity: .55; }
+  .ev.heartbeat { padding: 4px 0; opacity: .5; }
   .ev.heartbeat .content { font-size: 11px; }
   .ev.narrative .content { color: var(--text-primary); }
 
-  .ev.team-red   { border-left: 3px solid var(--series-red);   padding-left: 10px; }
-  .ev.team-blue  { border-left: 3px solid var(--series-blue);  padding-left: 10px; }
-  .ev.team-white { border-left: 3px solid var(--series-white); padding-left: 10px; }
+  /* Team-tagged rows (combined ledger) get a colored rail + tinted well */
+  .ev.team-red   { border-left: 3px solid var(--series-red);   padding-left: var(--sp-3); background: linear-gradient(90deg, color-mix(in srgb, var(--series-red) 7%, transparent), transparent 60%); }
+  .ev.team-blue  { border-left: 3px solid var(--series-blue);  padding-left: var(--sp-3); background: linear-gradient(90deg, color-mix(in srgb, var(--series-blue) 7%, transparent), transparent 60%); }
+  .ev.team-white { border-left: 3px solid var(--series-white); padding-left: var(--sp-3); background: linear-gradient(90deg, color-mix(in srgb, var(--series-white) 7%, transparent), transparent 60%); }
   .chip {
-    font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 2px 7px; border-radius: 3px;
     color: var(--page-plane);
   }
   .chip-red   { background: var(--series-red); }
@@ -153,9 +235,11 @@ PAGE = """
 <header>
   <h1>Purple Team Live View</h1>
   <div class="spacer"></div>
-  <button id="btn-start">Start Round</button>
-  <button id="btn-stop">Stop Round</button>
-  <button id="btn-restart">Restart Round</button>
+  <div class="round-controls">
+    <button id="btn-start" class="ctrl-go">Start Round</button>
+    <button id="btn-stop" class="ctrl-stop">Stop Round</button>
+    <button id="btn-restart">Restart Round</button>
+  </div>
   <span id="round-badge" class="badge idle"><span class="dot"></span>loading&hellip;</span>
 </header>
 <div id="result-banner" class="hidden"></div>
@@ -169,41 +253,61 @@ PAGE = """
 </nav>
 <main>
   <div id="panel-red" class="panel active">
-    <form class="action-form" id="red-template-form">
-      <label>Attack template
-        <select name="template_name">
-          <option value="sqli">SQL injection (/search)</option>
-          <option value="bruteforce">Login bruteforce (/admin/login)</option>
-          <option value="idor">IDOR (/documents/1)</option>
-          <option value="command_injection">Command injection (/admin/diagnostics)</option>
-        </select>
-      </label>
-      <button type="submit">Fire</button>
-    </form>
+    <div class="panel-grid">
+      <section class="card">
+        <h2 class="card-title"><span class="dot red"></span>Fire an attack</h2>
+        <form class="action-form" id="red-template-form">
+          <label>Attack template
+            <select name="template_name">
+              <option value="sqli">SQL injection (/search)</option>
+              <option value="bruteforce">Login bruteforce (/admin/login)</option>
+              <option value="idor">IDOR (/documents/1)</option>
+              <option value="command_injection">Command injection (/admin/diagnostics)</option>
+            </select>
+          </label>
+          <button type="submit">Fire</button>
+        </form>
+      </section>
+      <section class="card">
+        <h2 class="card-title">Attack frequency</h2>
+        <div id="red-frequency" class="freq"></div>
+      </section>
+    </div>
+    <h3 class="feed-title">Event feed</h3>
     <div id="events-red"></div>
   </div>
   <div id="panel-blue" class="panel">
-    <form class="action-form" id="blue-action-form">
-      <label>Action
-        <select name="action">
-          <option value="lock_account">Lock account (username)</option>
-          <option value="kill_session">Kill session (user_id)</option>
-          <option value="block_ip">Block IP (source_ip)</option>
-        </select>
-      </label>
-      <label>Target value <input type="text" name="target" required></label>
-      <button type="submit">Defend</button>
-    </form>
+    <section class="card" style="max-width: 480px;">
+      <h2 class="card-title"><span class="dot blue"></span>Take a defensive action</h2>
+      <form class="action-form" id="blue-action-form">
+        <label>Action
+          <select name="action">
+            <option value="lock_account">Lock account (username)</option>
+            <option value="kill_session">Kill session (user_id)</option>
+            <option value="block_ip">Block IP (source_ip)</option>
+          </select>
+        </label>
+        <label>Target value <input type="text" name="target" required></label>
+        <button type="submit">Defend</button>
+      </form>
+    </section>
+    <h3 class="feed-title">Event feed</h3>
     <div id="events-blue"></div>
   </div>
-  <div id="panel-white" class="panel"><div id="events-white"></div></div>
+  <div id="panel-white" class="panel">
+    <h3 class="feed-title" style="margin-top: 0;"><span class="dot white"></span>Referee assessments</h3>
+    <div id="events-white"></div>
+  </div>
   <div id="panel-advisor" class="panel">
-    <form class="action-form" id="advisor-form">
-      <label>Ask the purple-team advisor
-        <input type="text" name="question" required placeholder="What should blue do right now?">
-      </label>
-      <button type="submit">Ask</button>
-    </form>
+    <section class="card" style="max-width: 480px;">
+      <h2 class="card-title">Purple Advisor</h2>
+      <form class="action-form" id="advisor-form">
+        <label>Ask the purple-team advisor
+          <input type="text" name="question" required placeholder="What should blue do right now?">
+        </label>
+        <button type="submit">Ask</button>
+      </form>
+    </section>
     <div id="advisor-answer"></div>
   </div>
   <div id="panel-combined" class="panel">
@@ -218,6 +322,17 @@ PAGE = """
 const GOOD_PHASES = new Set(['run_complete', 'go_signal']);
 const CRITICAL_PHASES = new Set(['ollama_error', 'stop_signal', 'error']);
 const HEARTBEAT_PHASES = new Set(['heartbeat']);
+
+// Friendly names for the known red attack templates (dashboard/actions.py
+// RED_TEMPLATES). Keyed by request.path -- the identifier every red
+// http_request event carries, manual or autonomous. Unknown paths (an
+// autonomous agent can hit anything) fall back to the raw path.
+const ATTACK_LABELS = {
+  '/search': 'SQL injection',
+  '/admin/login': 'Login bruteforce',
+  '/documents/1': 'IDOR',
+  '/admin/diagnostics': 'Command injection',
+};
 
 // Phases that carry no free-text content field -- render a fixed, human
 // sentence instead of falling through to a raw JSON dump of whatever's left.
@@ -341,11 +456,37 @@ function renderList(el, list, emptyMsg) {
   // without scrolling.
   el.innerHTML = collapseHeartbeats(list).reverse().map(e => renderEvent(e)).join('');
 }
+// Attack-frequency tally: count red http_request events by request.path
+// (the template/route identifier both manual and autonomous red actions
+// carry) and render sorted, most-fired first, as plain CSS bars. Pure
+// client-side aggregation over the same red_events array the feed uses --
+// no backend change, same pattern as the combined ledger / round filter.
+function renderFrequency(list) {
+  const el = document.getElementById('red-frequency');
+  const counts = {};
+  for (const e of list || []) {
+    const path = e.request && e.request.path;
+    if (!path) continue;
+    counts[path] = (counts[path] || 0) + 1;
+  }
+  const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) { el.innerHTML = '<div class="empty">No attacks fired yet.</div>'; return; }
+  const max = rows[0][1];
+  el.innerHTML = rows.map(([path, n]) => {
+    const label = ATTACK_LABELS[path] || path;
+    const pct = Math.max(6, Math.round(n / max * 100));
+    return `<div class="freq-row">
+      <span class="freq-label" title="${esc(path)}">${esc(label)}</span>
+      <span class="freq-track"><span class="freq-fill" style="width:${pct}%"></span></span>
+      <span class="freq-count">${n}</span>
+    </div>`;
+  }).join('');
+}
 function renderResultBanner(result) {
   const banner = document.getElementById('result-banner');
   if (!result) { banner.className = 'hidden'; return; }
   const who = { blue: 'Blue won', red: 'Red won', budget_expired: 'Round timed out' }[result.outcome] || result.outcome;
-  banner.textContent = `Last round: ${who} (${Math.round(result.elapsed_seconds || 0)}s)`;
+  banner.textContent = `${who} (${Math.round(result.elapsed_seconds || 0)}s)`;
   banner.className = result.outcome === 'blue' ? 'good' : result.outcome === 'red' ? 'critical' : 'muted';
 }
 
@@ -469,6 +610,7 @@ async function tick() {
     renderList(document.getElementById('events-red'), data.red_events, 'No red team activity yet.');
     renderList(document.getElementById('events-blue'), data.blue_events, 'No blue team activity yet.');
     renderList(document.getElementById('events-white'), data.assessments, 'No referee assessments yet.');
+    renderFrequency(data.red_events);
 
     lastCombinedChron = buildCombined(data);
     renderCombinedPanel();
