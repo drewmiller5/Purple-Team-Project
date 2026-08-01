@@ -1,4 +1,6 @@
+import ipaddress
 import json
+import socket
 
 TOOL_SCHEMAS = [
     {
@@ -46,6 +48,36 @@ _ACTION_ENDPOINTS = {
 }
 
 
+def _protected_block_ip_targets():
+    """Infra/self identities blue_agent must never be tricked into
+    blocking, even if attacker-influenced alert content (H3) manipulates
+    the model into asking for it. Defense in depth alongside target's own
+    equivalent check (H2) -- blue_agent shouldn't rely solely on the
+    downstream endpoint to catch this.
+    """
+    hostnames = ("target", "wazuh.manager", "blue_agent", socket.gethostname())
+    # Both the literal hostnames and their resolved IPs are protected: the
+    # model sees these hostnames in its own system prompt/alert data and
+    # could plausibly be manipulated into naming one directly as `target`,
+    # not just its IP.
+    protected = {"127.0.0.1", *hostnames}
+    for hostname in hostnames:
+        try:
+            protected.add(socket.gethostbyname(hostname))
+        except socket.gaierror:
+            continue
+    return protected
+
+
+def _is_protected_block_ip_target(target: str) -> bool:
+    try:
+        if ipaddress.IPv4Address(target).is_loopback:
+            return True
+    except ValueError:
+        pass
+    return target in _protected_block_ip_targets()
+
+
 def dispatch_tool_call(call: dict, http, state) -> str:
     name = call["function"]["name"]
     args = call["function"].get("arguments", {})
@@ -62,6 +94,15 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         endpoint = _ACTION_ENDPOINTS.get(action)
         if endpoint is None:
             return json.dumps({"error": f"unknown action {action}"})
+
+        if action == "block_ip" and _is_protected_block_ip_target(target):
+            state.log_event({
+                "phase": "escalation_rejected",
+                "action": action,
+                "target": target,
+                "reason": "protected infrastructure target",
+            })
+            return json.dumps({"error": "target is protected infrastructure, refusing to dispatch"})
 
         path, field = endpoint
         result = http.request(method="POST", path=path, data={field: target})

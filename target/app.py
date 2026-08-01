@@ -1,5 +1,6 @@
 # target/app.py
 import os
+import secrets
 from pathlib import Path
 
 from flask import Flask
@@ -19,7 +20,11 @@ DEFAULT_LOG_PATH = "target/logs/requests.jsonl"
 
 def create_app(db_path: str = None, log_path: str = None) -> Flask:
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = "purple-lab-dev-key"  # sandboxed lab target, not production
+    # H6: was a source-committed literal, letting anyone forge a signed
+    # admin session cookie and skip /admin/login (and its telemetry)
+    # entirely. Generated fresh per process; sessions don't need to
+    # survive a restart in this lab.
+    app.config["SECRET_KEY"] = secrets.token_hex(32)
     # Action endpoints fail closed unless their token is injected by the
     # container runtime. It is intentionally separate from Flask's session key.
     app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")

@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from blue_agent.tools import TOOL_SCHEMAS, dispatch_tool_call
 
@@ -81,6 +81,76 @@ def test_dispatch_escalate_response_parses_string_arguments():
     http.request.assert_called_once_with(
         method="POST", path="/internal/lock-account", data={"username": "admin"}
     )
+
+
+def test_dispatch_escalate_response_block_ip_rejects_loopback_target():
+    """H3 regression test: escalate_response must not blindly forward
+    whatever target the model produces for block_ip -- an indirect-prompt-
+    injection-influenced decision to block loopback/infra must be rejected
+    server-side (in blue_agent's own dispatch, not left solely to target's
+    endpoint) rather than dispatched.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "block_ip", "target": "127.0.0.1"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "target is protected infrastructure, refusing to dispatch"}
+    state.log_event.assert_called_once()
+    logged = state.log_event.call_args[0][0]
+    assert logged["phase"] == "escalation_rejected"
+
+
+def test_dispatch_escalate_response_block_ip_rejects_infra_hostname_target():
+    """H3 regression test, hostname-resolution branch: the loopback-literal
+    test above never exercises _protected_block_ip_targets()'s hostname
+    lookups (wazuh.manager/target/blue_agent), since 127.0.0.1 is caught
+    by the earlier is_loopback check. Patch the resolved set directly to
+    prove that branch itself rejects a matching target.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "block_ip", "target": "172.19.0.5"},
+        }
+    }
+    with patch("blue_agent.tools._protected_block_ip_targets", return_value={"172.19.0.5"}):
+        result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "target is protected infrastructure, refusing to dispatch"}
+
+
+def test_dispatch_escalate_response_block_ip_rejects_literal_infra_hostname_target():
+    """H3 regression test: a model call naming an infra hostname directly
+    (e.g. target="wazuh.manager", plausible since these hostnames appear in
+    blue_agent's own system prompt/alert data) must be rejected even if
+    DNS resolution of that hostname fails or isn't checked first -- not
+    just its resolved IP.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "block_ip", "target": "wazuh.manager"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "target is protected infrastructure, refusing to dispatch"}
 
 
 def test_dispatch_escalate_response_unknown_action_returns_error():
