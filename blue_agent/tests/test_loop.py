@@ -341,6 +341,37 @@ def test_run_survives_oserror_from_direct_log_event_calls(tmp_path):
             MockOllama.return_value.chat.assert_called_once()
 
 
+def test_run_records_finding_to_memory_on_successful_escalate_response(tmp_path):
+    """H20 integration test: a full loop iteration that calls
+    escalate_response and successfully dispatches must result in a
+    state.record_finding call that lands in blue_memory.json -- exercising
+    the real BlueAgentState/dispatch_tool_call wiring, not mocks."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "escalate_response", "arguments": {"action": "lock_account", "target": "admin"}}}
+            ],
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.HttpTool") as MockHttp:
+        MockOllama.return_value.chat.return_value = tool_call_response
+        MockHttp.return_value.request.return_value = {"status_code": 200, "body": '{"locked": "admin"}'}
+        run(config)
+
+    memory = json.loads(Path(config.memory_path).read_text())
+    assert memory["side"] == "blue"
+    assert len(memory["entries"]) == 1
+    assert memory["entries"][0]["category"] == "lock_account"
+    assert memory["entries"][0]["success"] is True
+
+
 def test_run_stop_flag_acknowledgment_survives_oserror_from_log_event(tmp_path):
     """Same gap, stop-flag path: round_stop_acknowledged is logged directly,
     outside any try/except, before the loop even starts."""

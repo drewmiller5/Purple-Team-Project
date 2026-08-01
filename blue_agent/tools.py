@@ -107,6 +107,11 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         path, field = endpoint
         result = http.request(method="POST", path=path, data={field: target})
         state.log_event({"phase": "escalation", "action": action, "target": target, "response": result})
+        # H20: record the action taken so blue_memory.json accumulates
+        # history across runs and recall_past_findings has something to
+        # surface -- previously record_finding had zero call sites outside
+        # its own unit test.
+        state.record_finding(action, f"{action} on {target}", "error" not in result)
         return json.dumps(result)
 
     if name == "recall_past_findings":

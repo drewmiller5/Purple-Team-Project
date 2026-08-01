@@ -29,6 +29,64 @@ def test_dispatch_escalate_response_lock_account_posts_to_lock_account_endpoint(
     assert json.loads(result) == {"status_code": 200, "body": '{"locked": "admin"}'}
 
 
+def test_dispatch_escalate_response_records_finding_on_successful_dispatch():
+    """H20: escalate_response taking a real action must record it via
+    state.record_finding so blue_memory.json/recall_past_findings actually
+    accumulate history across runs, instead of record_finding being a
+    permanent no-op with zero call sites outside its own unit test."""
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": '{"locked": "admin"}'}
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "lock_account", "target": "admin"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    state.record_finding.assert_called_once_with(
+        "lock_account", "lock_account on admin", True
+    )
+
+
+def test_dispatch_escalate_response_records_failed_finding_when_http_errors():
+    http = MagicMock()
+    http.request.return_value = {"error": "connection refused"}
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "block_ip", "target": "10.0.0.5"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    state.record_finding.assert_called_once_with(
+        "block_ip", "block_ip on 10.0.0.5", False
+    )
+
+
+def test_dispatch_escalate_response_rejected_target_does_not_record_finding():
+    """The protected-infrastructure rejection path already logs an
+    escalation_rejected event and never reaches http.request -- it should
+    not also record a finding, since no action was actually taken."""
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "block_ip", "target": "127.0.0.1"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    state.record_finding.assert_not_called()
+
+
 def test_dispatch_escalate_response_kill_session_posts_to_kill_session_endpoint():
     http = MagicMock()
     http.request.return_value = {"status_code": 200, "body": "{}"}
