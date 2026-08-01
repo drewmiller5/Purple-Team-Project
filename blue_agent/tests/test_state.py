@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from blue_agent.config import BlueAgentConfig
 from blue_agent.state import BlueAgentState
 from shared.event_log import read_events
@@ -64,3 +66,15 @@ def test_recall_summary_lists_recorded_findings(tmp_path):
     summary = state.recall_summary()
     assert "escalation" in summary
     assert "hold" in summary
+
+
+def test_log_event_survives_oserror_from_underlying_write(tmp_path):
+    """H21 gap found in review: every direct state.log_event(...) call site
+    in loop.py/tools.py (round_start, round_stop_acknowledged, reasoning,
+    ollama_error, run_complete) routes through this one method. Guarding it
+    here -- instead of at each of those call sites -- is the root-cause fix:
+    a disk-full/permission OSError on the underlying file write must degrade
+    (skip the write), not crash the process."""
+    state = BlueAgentState(_config(tmp_path))
+    with patch("blue_agent.state.log_event", side_effect=OSError("disk full")):
+        state.log_event({"phase": "round_start"})  # must not raise

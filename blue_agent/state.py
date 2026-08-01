@@ -9,7 +9,15 @@ class BlueAgentState:
     def log_event(self, event: dict) -> None:
         event = dict(event)
         event["side"] = "blue"
-        log_event(self.config.event_log_path, event)
+        try:
+            log_event(self.config.event_log_path, event)
+        except OSError:
+            # H21: every call site (loop.py, tools.py, heartbeat()) routes
+            # through here. A disk-full/permission error writing the event
+            # log must degrade (skip the write), not crash the process --
+            # there's nowhere else to report it, since the event log is
+            # exactly what's failing.
+            pass
 
     def heartbeat(self) -> None:
         self.log_event({"phase": "heartbeat"})

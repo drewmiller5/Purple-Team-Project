@@ -320,3 +320,35 @@ def test_run_survives_oserror_from_heartbeat_disk_full(tmp_path):
     # still made it all the way through to completion.
     assert not any(e["phase"] == "heartbeat" for e in events)
     assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_survives_oserror_from_direct_log_event_calls(tmp_path):
+    """H21 gap found in review: direct state.log_event(...) calls outside
+    the tool-dispatch try/except (round_start, reasoning, run_complete, ...)
+    must not crash the process on OSError either -- same disk-full/
+    permission failure mode as heartbeat. Patches the underlying write
+    function every log_event call routes through, so every call site along
+    the happy path (round_start -> reasoning -> run_complete) is exercised."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    fake_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("blue_agent.state.log_event", side_effect=OSError("disk full")):
+        with patch("blue_agent.loop.OllamaClient") as MockOllama:
+            MockOllama.return_value.chat.return_value = fake_response
+            run(config)  # must not raise
+            MockOllama.return_value.chat.assert_called_once()
+
+
+def test_run_stop_flag_acknowledgment_survives_oserror_from_log_event(tmp_path):
+    """Same gap, stop-flag path: round_stop_acknowledged is logged directly,
+    outside any try/except, before the loop even starts."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    (Path(config.referee_state_dir) / "stop.flag").touch()
+
+    with patch("blue_agent.state.log_event", side_effect=OSError("disk full")):
+        with patch("blue_agent.loop.OllamaClient") as MockOllama:
+            run(config)  # must not raise
+            MockOllama.return_value.chat.assert_not_called()
