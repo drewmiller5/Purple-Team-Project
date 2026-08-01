@@ -62,7 +62,11 @@ def run(config) -> None:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(base_url=config.target_base_url)}
     ]
-    past = state.recall_summary()
+    try:
+        past = state.recall_summary()
+    except ValueError as exc:
+        state.log_event({"phase": "memory_corrupt", "error": str(exc)})
+        past = ""
     if past:
         messages.append({"role": "user", "content": f"Past findings from previous runs:\n{past}"})
 
@@ -83,6 +87,13 @@ def run(config) -> None:
         except (requests.RequestException, KeyError) as exc:
             state.log_event({"phase": "ollama_error", "error": str(exc)})
             continue
+
+        if not isinstance(assistant_message, dict):
+            state.log_event({
+                "phase": "ollama_error",
+                "error": f"unexpected message shape: {assistant_message!r}",
+            })
+            continue
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -93,7 +104,7 @@ def run(config) -> None:
         for call in tool_calls:
             try:
                 result = dispatch_tool_call(call, http=http, state=state)
-            except (KeyError, TypeError) as exc:
+            except (KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
                 result = json.dumps({"error": f"malformed tool call: {exc}"})
             messages.append({"role": "tool", "content": result})
 

@@ -46,9 +46,20 @@ def _stop_requested(referee_state_dir: str) -> bool:
     return (Path(referee_state_dir) / "stop.flag").exists()
 
 
+def _heartbeat_or_degrade(state) -> None:
+    """Best-effort heartbeat: a disk-full/permission OSError writing the
+    event log must not kill the process. There's nowhere else to log this
+    failure since the event log is exactly what's failing, so it's a
+    silent skip -- the next successful heartbeat recovers observability."""
+    try:
+        state.heartbeat()
+    except OSError:
+        pass
+
+
 def run(config) -> None:
     state = BlueAgentState(config)
-    state.heartbeat()  # unconditional pre-wait heartbeat: gives the referee something
+    _heartbeat_or_degrade(state)  # unconditional pre-wait heartbeat: gives the referee something
     # to key its go-signal off of immediately on startup, independent of whether/when
     # go.flag ever appears. Without this, blue writes nothing until go.flag exists, but
     # referee never writes go.flag until it sees a blue heartbeat -- permanent deadlock.
@@ -72,7 +83,7 @@ def run(config) -> None:
     state.log_event({"phase": "round_start"})
 
     for _ in range(config.max_iterations):
-        state.heartbeat()
+        _heartbeat_or_degrade(state)
 
         if _stop_requested(config.referee_state_dir):
             state.log_event({"phase": "round_stop_acknowledged"})
@@ -103,6 +114,14 @@ def run(config) -> None:
             state.log_event({"phase": "ollama_error", "error": str(exc)})
             time.sleep(config.poll_interval_seconds)
             continue
+
+        if not isinstance(assistant_message, dict):
+            state.log_event({
+                "phase": "ollama_error",
+                "error": f"unexpected message shape: {assistant_message!r}",
+            })
+            time.sleep(config.poll_interval_seconds)
+            continue
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -113,7 +132,7 @@ def run(config) -> None:
         for call in tool_calls:
             try:
                 result = dispatch_tool_call(call, http=http, state=state)
-            except (KeyError, TypeError) as exc:
+            except (KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
                 result = json.dumps({"error": f"malformed tool call: {exc}"})
             messages.append({"role": "tool", "content": result})
 

@@ -226,3 +226,97 @@ def test_run_handles_ollama_key_error_gracefully(tmp_path):
     assert any(e["phase"] == "ollama_error" for e in events)
     # Verify run_complete was logged (loop continued after error)
     assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_non_dict_ollama_message_gracefully(tmp_path):
+    """K2/H15: response['message'] can be present but non-dict (e.g. None),
+    which crashes the old code with AttributeError on assistant_message.get(...).
+    Must be guarded and treated like the other ollama_error cases."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = {"message": "not a dict"}
+
+        run(config)
+        MockOllama.return_value.chat.assert_called()
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "ollama_error" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_malformed_json_tool_call_arguments_gracefully(tmp_path):
+    """H16: json.loads(args) on a malformed string must not crash the process;
+    it should surface as the same clean per-call error as other malformed
+    tool calls."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "escalate_response", "arguments": "{not valid json"}}
+            ],
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_oserror_from_tool_dispatch_gracefully(tmp_path):
+    """H17/H21: OSError from the file I/O underneath state.log_event (disk
+    full, permission error) during tool dispatch must not crash the process."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "escalate_response", "arguments": {"action": "lock_account", "target": "admin"}}}
+            ],
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.dispatch_tool_call", side_effect=OSError("disk full")):
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_survives_oserror_from_heartbeat_disk_full(tmp_path):
+    """H21: state.heartbeat() runs unconditionally every iteration, outside
+    any try/except. A disk-full/permission OSError writing the event log
+    must degrade (skip that heartbeat) rather than kill the process."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+
+    with patch("blue_agent.state.BlueAgentState.heartbeat", side_effect=OSError("disk full")):
+        with patch("blue_agent.loop.OllamaClient") as MockOllama:
+            MockOllama.return_value.chat.return_value = {
+                "message": {"role": "assistant", "content": "ok", "tool_calls": []}
+            }
+            run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    # No heartbeat events (they all raised and were swallowed), but the run
+    # still made it all the way through to completion.
+    assert not any(e["phase"] == "heartbeat" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)

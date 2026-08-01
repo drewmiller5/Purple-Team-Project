@@ -183,3 +183,94 @@ def test_run_handles_ollama_key_error_gracefully(tmp_path):
     assert any(e["phase"] == "ollama_error" for e in events)
     # Verify run_complete was logged (loop continued after error)
     assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_non_dict_ollama_message_gracefully(tmp_path):
+    """K2/H15: response['message'] can be present but non-dict (e.g. None),
+    which crashes the old code with AttributeError on assistant_message.get(...).
+    Must be guarded and treated like the other ollama_error cases."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = {"message": None}
+
+        run(config)
+        MockOllama.return_value.chat.assert_called()
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "ollama_error" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_malformed_json_tool_call_arguments_gracefully(tmp_path):
+    """H16: json.loads(args) on a malformed string must not crash the process;
+    it should surface as the same clean per-call error as other malformed
+    tool calls."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": "{not valid json"}}
+            ],
+        }
+    }
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_oserror_from_tool_dispatch_gracefully(tmp_path):
+    """H17/H21: OSError from the file I/O underneath record_finding/log_event
+    (disk full, permission error) must not crash the process."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+            ],
+        }
+    }
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.dispatch_tool_call", side_effect=OSError("disk full")):
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
+def test_run_handles_corrupt_memory_file_at_recall_gracefully(tmp_path):
+    """K2: shared/memory.py's typed ValueError on corrupt JSON, raised from
+    state.recall_summary() before _wait_for_go, must not crash the process
+    before the round even starts."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.memory_path).write_text("{not valid json", encoding="utf-8")
+
+    fake_chat_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_chat_response
+        run(config)
+
+        messages_arg = MockOllama.return_value.chat.call_args.kwargs["messages"]
+        assert not any("Past findings" in m.get("content", "") for m in messages_arg)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "memory_corrupt" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)
