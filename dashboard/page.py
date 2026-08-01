@@ -22,7 +22,8 @@ PAGE = """
     --border-strong:  rgba(255,255,255,0.16);
     --series-red:     #e66767;
     --series-blue:    #4a92e8;
-    --series-white:   #d99a1c;
+    --series-white:   #ffffff;
+    --series-purple:  #a855f7;
     --status-good:     #2bb24c;
     --status-critical: #e0483f;
     --status-muted:    #86847d;
@@ -135,12 +136,13 @@ PAGE = """
   nav.tabs button[data-team="red"].active      { border-bottom-color: var(--series-red); }
   nav.tabs button[data-team="blue"].active     { border-bottom-color: var(--series-blue); }
   nav.tabs button[data-team="white"].active    { border-bottom-color: var(--series-white); }
-  nav.tabs button[data-team="advisor"].active  { border-bottom-color: var(--text-primary); }
+  nav.tabs button[data-team="advisor"].active  { border-bottom-color: var(--series-purple); }
   nav.tabs button[data-team="combined"].active { border-bottom-color: var(--text-primary); }
-  .dot.red   { background: var(--series-red); }
-  .dot.blue  { background: var(--series-blue); }
-  .dot.white { background: var(--series-white); }
-  .dot.combined { background: conic-gradient(var(--series-red) 0 33%, var(--series-blue) 33% 66%, var(--series-white) 66% 100%); }
+  .dot.red    { background: var(--series-red); }
+  .dot.blue   { background: var(--series-blue); }
+  .dot.white  { background: var(--series-white); }
+  .dot.purple { background: var(--series-purple); }
+  .dot.combined { background: conic-gradient(var(--series-red), var(--series-blue), var(--series-white), var(--series-red)); }
 
   /* --- Panels ------------------------------------------------------- */
   main { flex: 1; min-height: 0; position: relative; }
@@ -248,7 +250,7 @@ PAGE = """
   <button data-team="red" class="active"><span class="dot red"></span>Red Team</button>
   <button data-team="blue"><span class="dot blue"></span>Blue Team</button>
   <button data-team="white"><span class="dot white"></span>White Team (Referee)</button>
-  <button data-team="advisor">Purple Advisor</button>
+  <button data-team="advisor"><span class="dot purple"></span>Purple Advisor</button>
   <button data-team="combined"><span class="dot combined"></span>Combined Ledger</button>
 </nav>
 <main>
