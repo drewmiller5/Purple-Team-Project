@@ -158,10 +158,28 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # so without this a valid-but-wrong-shape line would still crash the
 # `.path`/`.method` field access downstream and reproduce the same
 # poison-pill failure through a narrower door (code review finding on
-# this fix). jq's own exit status is still meaningful here (JQ_STATUS
-# below): it now only goes non-zero for a genuinely fatal condition
-# (e.g. the file becoming unreadable mid-read), not for content that was
-# merely malformed, since malformed content is now handled inline.
+# this fix).
+#
+# Fix round 4 (final review of round 3): select(type == "object") only
+# guarantees the LINE's top level is an object -- it does nothing to
+# guarantee any NESTED field is the shape the rest of the pipeline
+# assumes. A line can be a well-formed object and still crash downstream:
+# form_params as a string instead of an object makes .form_params.username
+# error ("Cannot index string with string"); a non-string .timestamp
+# makes sub()/fromdateiso8601 error (they require a string input). Since
+# this jq invocation processes every line inside one [inputs | ...] array
+# construction, an uncaught error on ANY single line -- however deep --
+# aborts the ENTIRE run, reproducing the exact poison-pill failure class
+# fixed twice already (jq -s slurp, then unparseable/non-object lines)
+# through a third, narrower door the per-field type check didn't close.
+# Fixed by widening the try/catch to wrap the WHOLE per-line chain, from
+# fromjson through the final timestamp select(), instead of guarding only
+# the parse step and the top-level shape check -- any error anywhere in
+# a single line's processing now just skips that line (catch empty),
+# never the whole scan. jq's own exit status (JQ_STATUS below) now only
+# goes non-zero for a genuinely fatal condition (e.g. the file becoming
+# unreadable mid-read), not for content that was merely malformed at any
+# depth, since malformed content of any shape is now handled inline.
 #
 # ponytail: full linear scan of $REQUEST_LOG on every invocation (this
 # fires on every POST to /admin/login) -- O(log size) per event instead
@@ -180,14 +198,16 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # silently killing the script before JQ_STATUS is ever read.
 if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
     [ inputs
-      | (try fromjson catch empty)
-      | select(type == "object")
-      | select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
-               and .status_code == 200 and .form_params.username != null)
-      | .timestamp
-      | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-      | fromdateiso8601
-      | select(. >= $cutoff)
+      | (try (
+          fromjson
+          | select(type == "object")
+          | select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
+                   and .status_code == 200 and .form_params.username != null)
+          | .timestamp
+          | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+          | fromdateiso8601
+          | select(. >= $cutoff)
+        ) catch empty)
     ] | length
 ' "$REQUEST_LOG" 2>/dev/null); then
     JQ_STATUS=0

@@ -341,6 +341,100 @@ else
     fail "fixed script was expected to skip the non-object line and attempt escalation, got exit=$NEW_EXIT_D, log=[$(cat "$NEW_AR_LOG_D" 2>/dev/null)]"
 fi
 
+# ---------------------------------------------------------------------
+# Scenario E (Phase 3 Task 5, fix round 4): a line that IS a JSON object
+# (passes `try fromjson catch empty` AND `select(type == "object")`) but
+# has a WRONG-SHAPED nested field -- a string where an object is expected,
+# or a number where a string is expected. `select(type == "object")` only
+# checks the top-level shape; it does nothing to guarantee any nested
+# field is the type the rest of the pipeline assumes. sub()/fromdateiso8601
+# require a string input and error on a number; indexing `.form_params`
+# with `.username` errors if `.form_params` is a string. Since this jq
+# invocation processes all lines in one `[inputs | ...]` pass, an
+# uncaught error on ANY single line's nested field aborts the ENTIRE
+# array construction -- the exact poison-pill failure mode Task 5 has
+# already fixed twice (jq -s full-slurp, then unparseable/non-object
+# lines), recurring through a third, narrower door the per-field
+# select(type=="object") check does not close.
+#   - E1 (bruteforce-guard.sh): a matching line with `form_params` as a
+#     STRING instead of an object -- `.form_params.username` errors.
+#   - E2 (idor-guard.sh): a matching line with `timestamp` as a NUMBER
+#     instead of a string -- `sub()` errors (not a string).
+# Both are mixed into an otherwise-legitimate 5-line burst that alone
+# would cross THRESHOLD=5. Expected fixed behavior: the whole per-line
+# filter chain (fromjson through the final timestamp select()) wrapped in
+# ONE `try ... catch empty` skips just the bad line, still counts the 5
+# real matches, and attempts the real action -- exactly like Scenario D,
+# but for a wrong-shaped nested field instead of a wrong-shaped top level.
+# ---------------------------------------------------------------------
+echo "=== Scenario E: wrong-shaped nested field (bruteforce-guard.sh + idor-guard.sh) ==="
+
+REQ_LOG_E1="$WORKDIR/requests-e1.jsonl"
+: > "$REQ_LOG_E1"
+echo '{"path":"/admin/login","method":"POST","remote_addr":"203.0.113.77","status_code":200,"form_params":"not-an-object","timestamp":"bogus"}' >> "$REQ_LOG_E1"
+i=0
+while [ "$i" -lt 5 ]; do
+    ts=$(iso_ts $((BASE_EPOCH + 30000 + i)))
+    printf '{"path":"/admin/login","method":"POST","remote_addr":"203.0.113.77","status_code":200,"form_params":{"username":"admin"},"timestamp":"%s"}\n' "$ts" >> "$REQ_LOG_E1"
+    i=$((i + 1))
+done
+
+EVENT_EPOCH_E1=$((BASE_EPOCH + 30004))
+EVENT_TS_E1=$(iso_ts "$EVENT_EPOCH_E1")
+AR_PAYLOAD_E1=$(printf '{"command":"add","parameters":{"alert":{"data":{"srcip":"203.0.113.77","timestamp":"%s"}}}}' "$EVENT_TS_E1")
+
+NEW_SCRIPT_E1="$WORKDIR/new-bruteforce-guard-e1.sh"
+NEW_AR_LOG_E1="$WORKDIR/new-active-responses-e1.log"
+: > "$NEW_AR_LOG_E1"
+
+make_runnable_copy "bruteforce-guard.sh" "worktree" "$NEW_SCRIPT_E1" "$REQ_LOG_E1" "$NEW_AR_LOG_E1"
+
+set +e
+printf '%s\n' "$AR_PAYLOAD_E1" | sh "$NEW_SCRIPT_E1" >/dev/null 2>&1
+NEW_EXIT_E1=$?
+set -e
+
+echo "  bruteforce-guard.sh fixed exit=$NEW_EXIT_E1"
+
+if [ "$NEW_EXIT_E1" -ne 0 ] && ! grep -q "jq counting pipeline failed" "$NEW_AR_LOG_E1"; then
+    pass "bruteforce-guard.sh skips a line with a wrong-shaped form_params field and still correctly counts and escalates the real burst"
+else
+    fail "bruteforce-guard.sh was expected to skip the wrong-shaped line and attempt escalation, got exit=$NEW_EXIT_E1, log=[$(cat "$NEW_AR_LOG_E1" 2>/dev/null)]"
+fi
+
+REQ_LOG_E2="$WORKDIR/requests-e2.jsonl"
+: > "$REQ_LOG_E2"
+echo '{"method":"GET","path":"/documents/9","remote_addr":"198.51.100.88","timestamp":12345}' >> "$REQ_LOG_E2"
+i=0
+while [ "$i" -lt 5 ]; do
+    ts=$(iso_ts $((BASE_EPOCH + 40000 + i)))
+    printf '{"method":"GET","path":"/documents/9","remote_addr":"198.51.100.88","timestamp":"%s"}\n' "$ts" >> "$REQ_LOG_E2"
+    i=$((i + 1))
+done
+
+EVENT_EPOCH_E2=$((BASE_EPOCH + 40004))
+EVENT_TS_E2=$(iso_ts "$EVENT_EPOCH_E2")
+AR_PAYLOAD_E2=$(printf '{"command":"add","parameters":{"alert":{"data":{"srcip":"198.51.100.88","timestamp":"%s"}}}}' "$EVENT_TS_E2")
+
+NEW_SCRIPT_E2="$WORKDIR/new-idor-guard-e2.sh"
+NEW_AR_LOG_E2="$WORKDIR/new-active-responses-e2.log"
+: > "$NEW_AR_LOG_E2"
+
+make_runnable_copy "idor-guard.sh" "worktree" "$NEW_SCRIPT_E2" "$REQ_LOG_E2" "$NEW_AR_LOG_E2"
+
+set +e
+printf '%s\n' "$AR_PAYLOAD_E2" | sh "$NEW_SCRIPT_E2" >/dev/null 2>&1
+NEW_EXIT_E2=$?
+set -e
+
+echo "  idor-guard.sh fixed exit=$NEW_EXIT_E2"
+
+if [ "$NEW_EXIT_E2" -ne 0 ] && ! grep -q "jq counting pipeline failed" "$NEW_AR_LOG_E2"; then
+    pass "idor-guard.sh skips a line with a wrong-shaped (numeric) timestamp field and still correctly counts and escalates the real burst"
+else
+    fail "idor-guard.sh was expected to skip the wrong-shaped line and attempt escalation, got exit=$NEW_EXIT_E2, log=[$(cat "$NEW_AR_LOG_E2" 2>/dev/null)]"
+fi
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
     echo "ALL PASS"

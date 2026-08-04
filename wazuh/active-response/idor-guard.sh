@@ -221,9 +221,19 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # aborting the whole scan. A `select(type == "object")` right after the
 # parse also skips a line that's syntactically valid JSON but not an
 # object -- see bruteforce-guard.sh's matching note for why `try/catch`
-# alone doesn't cover this case. jq's own exit status is still
-# meaningful here (JQ_STATUS below): it now only goes non-zero for a
-# genuinely fatal condition, not for content that was merely malformed.
+# alone doesn't cover this case.
+#
+# Fix round 4 (final review of round 3) -- same root cause and same fix
+# as bruteforce-guard.sh's matching block: select(type == "object") only
+# checks the line's top level. A nested field can still be the wrong
+# shape (a numeric .timestamp makes sub() error, since it requires a
+# string input) and crash the whole [inputs | ...] array construction
+# the same way an unparseable line used to. Fixed by widening the
+# try/catch to wrap the entire per-line chain (fromjson through the
+# final timestamp select()) instead of guarding only the parse step and
+# the top-level shape check. jq's own exit status (JQ_STATUS below) now
+# only goes non-zero for a genuinely fatal condition, not for content
+# that was merely malformed at any depth.
 #
 # ponytail: full linear scan of $REQUEST_LOG per invocation (fires on
 # every GET to /documents/<id>) -- see bruteforce-guard.sh's matching
@@ -238,13 +248,15 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # silently killing the script before JQ_STATUS is ever read.
 if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
     [ inputs
-      | (try fromjson catch empty)
-      | select(type == "object")
-      | select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
-      | .timestamp
-      | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-      | fromdateiso8601
-      | select(. >= $cutoff)
+      | (try (
+          fromjson
+          | select(type == "object")
+          | select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
+          | .timestamp
+          | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+          | fromdateiso8601
+          | select(. >= $cutoff)
+        ) catch empty)
     ] | length
 ' "$REQUEST_LOG" 2>/dev/null); then
     JQ_STATUS=0
