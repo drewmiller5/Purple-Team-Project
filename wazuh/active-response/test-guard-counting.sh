@@ -295,6 +295,52 @@ else
     fail "fixed script was expected to skip the malformed line and attempt escalation, got exit=$NEW_EXIT_C, log=[$(cat "$NEW_AR_LOG_C" 2>/dev/null)]"
 fi
 
+# ---------------------------------------------------------------------
+# Scenario D (MEDIUM gap found in code review of c7b017b): a line that is
+# syntactically VALID JSON but not an object (a bare number, in this
+# case) passes `try fromjson catch empty` cleanly (parsing succeeds), so
+# it isn't skipped there -- it then hits the `.method`/`.path` field
+# access downstream, which jq cannot do on a non-object and raises an
+# uncaught error, reproducing the exact poison-pill failure through a
+# narrower door. Not reachable via target/logging_middleware.py's own
+# write path (always writes a dict), but a real gap in the fix's own
+# "malformed line" guarantee if the log is ever touched by anything else.
+# ---------------------------------------------------------------------
+echo "=== Scenario D: valid-but-non-object JSON line (idor-guard.sh) ==="
+
+REQ_LOG_D="$WORKDIR/requests-d.jsonl"
+: > "$REQ_LOG_D"
+echo '42' >> "$REQ_LOG_D"
+i=0
+while [ "$i" -lt 5 ]; do
+    ts=$(iso_ts $((BASE_EPOCH + 20000 + i)))
+    printf '{"method":"GET","path":"/documents/7","remote_addr":"198.51.100.200","timestamp":"%s"}\n' "$ts" >> "$REQ_LOG_D"
+    i=$((i + 1))
+done
+
+EVENT_EPOCH_D=$((BASE_EPOCH + 20004))
+EVENT_TS_D=$(iso_ts "$EVENT_EPOCH_D")
+AR_PAYLOAD_D=$(printf '{"command":"add","parameters":{"alert":{"data":{"srcip":"198.51.100.200","timestamp":"%s"}}}}' "$EVENT_TS_D")
+
+NEW_SCRIPT_D="$WORKDIR/new-idor-guard-d.sh"
+NEW_AR_LOG_D="$WORKDIR/new-active-responses-d.log"
+: > "$NEW_AR_LOG_D"
+
+make_runnable_copy "idor-guard.sh" "worktree" "$NEW_SCRIPT_D" "$REQ_LOG_D" "$NEW_AR_LOG_D"
+
+set +e
+printf '%s\n' "$AR_PAYLOAD_D" | sh "$NEW_SCRIPT_D" >/dev/null 2>&1
+NEW_EXIT_D=$?
+set -e
+
+echo "  fixed exit=$NEW_EXIT_D"
+
+if [ "$NEW_EXIT_D" -ne 0 ] && ! grep -q "jq counting pipeline failed" "$NEW_AR_LOG_D"; then
+    pass "fixed script skips a valid-but-non-object JSON line and still correctly counts and escalates the real burst"
+else
+    fail "fixed script was expected to skip the non-object line and attempt escalation, got exit=$NEW_EXIT_D, log=[$(cat "$NEW_AR_LOG_D" 2>/dev/null)]"
+fi
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
     echo "ALL PASS"

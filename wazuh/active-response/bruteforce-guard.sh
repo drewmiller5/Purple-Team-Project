@@ -152,7 +152,13 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # one independently with `try fromjson catch empty` -- a malformed line
 # simply produces no value and is skipped, exactly like a real line that
 # fails the timestamp/field select() below, instead of aborting the
-# whole scan. jq's own exit status is still meaningful here (JQ_STATUS
+# whole scan. A `select(type == "object")` right after the parse also
+# skips a line that's syntactically valid JSON but not an object (a bare
+# number/string/array) -- `try/catch` only guards the parse step itself,
+# so without this a valid-but-wrong-shape line would still crash the
+# `.path`/`.method` field access downstream and reproduce the same
+# poison-pill failure through a narrower door (code review finding on
+# this fix). jq's own exit status is still meaningful here (JQ_STATUS
 # below): it now only goes non-zero for a genuinely fatal condition
 # (e.g. the file becoming unreadable mid-read), not for content that was
 # merely malformed, since malformed content is now handled inline.
@@ -175,6 +181,7 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
     [ inputs
       | (try fromjson catch empty)
+      | select(type == "object")
       | select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
                and .status_code == 200 and .form_params.username != null)
       | .timestamp

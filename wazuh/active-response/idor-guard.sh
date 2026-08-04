@@ -218,9 +218,12 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # window. Fixed by reading the file as raw lines (`-R`, `-n`+`inputs`)
 # and parsing each one independently with `try fromjson catch empty` --
 # a malformed line simply produces no value and is skipped, instead of
-# aborting the whole scan. jq's own exit status is still meaningful here
-# (JQ_STATUS below): it now only goes non-zero for a genuinely fatal
-# condition, not for content that was merely malformed.
+# aborting the whole scan. A `select(type == "object")` right after the
+# parse also skips a line that's syntactically valid JSON but not an
+# object -- see bruteforce-guard.sh's matching note for why `try/catch`
+# alone doesn't cover this case. jq's own exit status is still
+# meaningful here (JQ_STATUS below): it now only goes non-zero for a
+# genuinely fatal condition, not for content that was merely malformed.
 #
 # ponytail: full linear scan of $REQUEST_LOG per invocation (fires on
 # every GET to /documents/<id>) -- see bruteforce-guard.sh's matching
@@ -236,6 +239,7 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
     [ inputs
       | (try fromjson catch empty)
+      | select(type == "object")
       | select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
       | .timestamp
       | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
