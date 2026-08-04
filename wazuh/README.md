@@ -10,6 +10,13 @@ $ sysctl -w vm.max_map_count=262144
 ```
 $ docker-compose -f generate-indexer-certs.yml run --rm generator
 ```
+
+**Do not commit the generated private keys.** `root-ca.key` and
+`root-ca-manager.key` under `config/wazuh_indexer_ssl_certs/` are no longer
+tracked in git (`*.key` is in the repo's `.gitignore`) -- this step
+regenerates them locally, and each clone/deploy should run it and get its
+own root CA rather than reuse someone else's key material.
+
 3) Start the environment with docker-compose:
 
 - In the foregroud:

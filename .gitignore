@@ -6,3 +6,4 @@ target/logs/*.jsonl
 .env
 Pipfile.lock
 .worktrees/
+*.key
