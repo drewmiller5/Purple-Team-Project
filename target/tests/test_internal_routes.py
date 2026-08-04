@@ -58,7 +58,10 @@ def test_lock_account_blocks_future_login(tmp_path):
     assert b"blocked" in response.data.lower()
 
 
-def test_kill_session_blocks_subsequent_admin_requests(tmp_path):
+def test_lock_account_permanent_blocks_subsequent_admin_requests(tmp_path):
+    # H12: renamed from kill_session -- route path (/internal/kill-session)
+    # is unchanged, only the Python function name changed to match its real
+    # behavior (a permanent block, not a session kill).
     client = _make_client(tmp_path)
     client.post("/admin/login", data={"username": "admin", "password": "admin123"})
 
@@ -77,7 +80,7 @@ def test_unblocked_account_logs_in_normally(tmp_path):
     assert b"Welcome" in response.data
 
 
-def test_kill_session_rejects_missing_or_non_numeric_user_id(tmp_path):
+def test_lock_account_permanent_rejects_missing_or_non_numeric_user_id(tmp_path):
     client = _make_client(tmp_path)
     client.post("/admin/login", data={"username": "admin", "password": "admin123"})
 
@@ -172,3 +175,68 @@ def test_block_ip_rejects_resolved_infrastructure_addresses(tmp_path):
             assert response.get_json()["error"] == "source_ip is protected infrastructure"
 
     mock_run.assert_not_called()
+
+
+def test_lock_account_rejects_empty_or_whitespace_username(tmp_path):
+    # H13: an empty/whitespace-only username was previously accepted and
+    # permanently stored with no validation.
+    client = _make_client(tmp_path)
+
+    empty = _internal_post(client, "/internal/lock-account", {"username": ""})
+    assert empty.status_code == 400
+    assert "error" in empty.get_json()
+
+    whitespace = _internal_post(client, "/internal/lock-account", {"username": "   "})
+    assert whitespace.status_code == 400
+    assert "error" in whitespace.get_json()
+
+    missing = _internal_post(client, "/internal/lock-account", {})
+    assert missing.status_code == 400
+
+    conn = get_connection(_make_app(tmp_path).config["DB_PATH"])
+    rows = conn.execute("SELECT COUNT(*) FROM blocked_users").fetchone()[0]
+    conn.close()
+    assert rows == 0
+
+
+def test_lock_account_handles_unique_constraint_violation_cleanly(tmp_path):
+    # H11: blocked_users.username now has a UNIQUE index. The existing
+    # is_blocked-then-insert check isn't atomic, so a race can still slip a
+    # second INSERT past the check -- that must be handled cleanly (still a
+    # 200, "already blocked" outcome), not surfaced as a raw IntegrityError.
+    app = _make_app(tmp_path)
+    client = app.test_client()
+
+    with patch("target.routes.internal.is_blocked", return_value=False):
+        first = _internal_post(client, "/internal/lock-account", {"username": "admin"})
+        second = _internal_post(client, "/internal/lock-account", {"username": "admin"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    conn = get_connection(app.config["DB_PATH"])
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM blocked_users WHERE username = ?", ("admin",)
+    ).fetchone()[0]
+    conn.close()
+    assert rows == 1
+
+
+def test_protected_source_ips_caches_dns_lookups(tmp_path):
+    # H61: _protected_source_ips() used to call socket.gethostbyname() 3x
+    # plus read /proc/net/route on every call. It must now compute once and
+    # reuse the cached result.
+    from target.routes import internal
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9") as mock_lookup:
+            first = internal._protected_source_ips()
+            second = internal._protected_source_ips()
+
+        assert first == second
+        # 4 hostnames resolved on the first call only; the second call must
+        # not trigger any additional socket.gethostbyname calls.
+        assert mock_lookup.call_count == 4
+    finally:
+        internal._protected_source_ips.cache_clear()

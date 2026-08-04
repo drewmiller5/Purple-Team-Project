@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS blocked_users (
     username TEXT, user_id INTEGER
 );
+
+-- H11: cheap hardening against the check-then-insert race in
+-- /internal/lock-account (not live today -- single-threaded dev server --
+-- but free to add). SQLite treats NULLs as distinct under UNIQUE, so the
+-- many NULL-username rows /internal/kill-session inserts are unaffected.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_users_username ON blocked_users (username);
 """
 
 

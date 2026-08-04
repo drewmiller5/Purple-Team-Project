@@ -2,7 +2,9 @@
 import hmac
 import ipaddress
 import socket
+import sqlite3
 import subprocess
+from functools import lru_cache
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -17,8 +19,14 @@ def _is_authorized_internal_action():
     return bool(expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token))
 
 
+@lru_cache(maxsize=1)
 def _protected_source_ips():
-    """Return the target and essential lab peers that must never be blocked."""
+    """Return the target and essential lab peers that must never be blocked.
+
+    H61: DNS/file-I/O lookups here are cheap-but-not-free and don't change
+    within a process's lifetime, so compute once and cache rather than
+    re-resolving on every /internal/block-ip request.
+    """
     protected = {"127.0.0.1"}
     for hostname in ("target", socket.gethostname(), "wazuh.manager", "blue_agent"):
         try:
@@ -51,7 +59,11 @@ def lock_account():
     unauthorized = _reject_unauthorized_action()
     if unauthorized:
         return unauthorized
-    username = request.form.get("username", "")
+    username = request.form.get("username", "").strip()
+    if not username:
+        # H13: an empty/whitespace-only username was previously accepted
+        # and stored permanently with no way to identify or undo it.
+        return jsonify({"error": "username is required"}), 400
     conn = get_connection(current_app.config["DB_PATH"])
     # Final-review fix (finding #5): bruteforce-guard.sh re-invokes this
     # endpoint on every subsequent matching event once the window count is
@@ -60,15 +72,27 @@ def lock_account():
     # ('admin', None) rows before this check existed. Skip the insert (but
     # still return 200 -- the caller's desired end state, "this account is
     # blocked", already holds) if already blocked.
-    if not is_blocked(conn, username=username):
-        conn.execute("INSERT INTO blocked_users (username) VALUES (?)", (username,))
-        conn.commit()
+    try:
+        if not is_blocked(conn, username=username):
+            conn.execute("INSERT INTO blocked_users (username) VALUES (?)", (username,))
+            conn.commit()
+    except sqlite3.IntegrityError:
+        # H11: the check-then-insert above still isn't atomic. The UNIQUE
+        # constraint on blocked_users.username is the backstop for a
+        # concurrent duplicate insert -- treat it the same as "already
+        # blocked" rather than surfacing a raw 500.
+        conn.rollback()
     conn.close()
     return jsonify({"locked": username}), 200
 
 
 @internal_bp.route("/kill-session", methods=["POST"])
-def kill_session():
+def lock_account_permanent():
+    # H12 (2026-07-28 user decision): renamed from kill_session -- this
+    # endpoint doesn't kill a session, it permanently blocks the account's
+    # user_id from /admin/diagnostics with no unblock mechanism. Route path
+    # stays /internal/kill-session (external contract for blue_agent /
+    # AR scripts); only the Python name changes to match real behavior.
     unauthorized = _reject_unauthorized_action()
     if unauthorized:
         return unauthorized
