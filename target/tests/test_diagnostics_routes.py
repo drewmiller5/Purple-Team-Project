@@ -67,18 +67,58 @@ def _mock_timed_out_process(pid=12345):
 def test_diagnostics_timeout_returns_clean_json_error_not_500(tmp_path):
     """H10: subprocess.TimeoutExpired must not become an uncaught 500 --
     the route should catch it and return the same jsonify({"error": ...})
-    shape every other route in this file uses."""
+    shape every other route in this file uses. os.getpgid/os.killpg are
+    mocked (not left to run for real against a fabricated pid) so this
+    test's outcome doesn't depend on the host OS's os.name -- on a real
+    POSIX host an unmocked os.getpgid(12345) would raise
+    ProcessLookupError for a pid that doesn't exist, which is exactly the
+    unguarded-cleanup gap this test (plus the dedicated test below) now
+    covers."""
     client = _make_client(tmp_path)
     client.post("/admin/login", data={"username": "admin", "password": "admin123"})
 
     mock_process = _mock_timed_out_process()
-    with patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process):
+    with (
+        patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process),
+        patch("target.routes.diagnostics.os.getpgid", return_value=999, create=True),
+        patch("target.routes.diagnostics.os.killpg", create=True),
+        patch("target.routes.diagnostics.os.name", "posix"),
+        patch("target.routes.diagnostics.signal.SIGKILL", object(), create=True),
+    ):
         response = client.post(
             "/admin/diagnostics",
             data={"host": "127.0.0.1; sleep 600"},
         )
 
     assert response.status_code != 500
+    assert response.status_code == 504
+    body = response.get_json()
+    assert body is not None
+    assert "error" in body
+
+
+def test_diagnostics_timeout_cleanup_survives_process_already_gone(tmp_path):
+    """Reviewer-flagged gap: os.getpgid/os.killpg were not guarded against
+    their own failure. If the timed-out process already exited/was
+    reaped between the timeout firing and the cleanup running,
+    os.getpgid raises ProcessLookupError -- unguarded, that exception
+    propagates past the intended jsonify(...), 504 response and becomes
+    an uncaught 500, the exact outcome H10 exists to prevent."""
+    client = _make_client(tmp_path)
+    client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+
+    mock_process = _mock_timed_out_process()
+    with (
+        patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process),
+        patch("target.routes.diagnostics.os.getpgid", side_effect=ProcessLookupError, create=True),
+        patch("target.routes.diagnostics.os.killpg", create=True),
+        patch("target.routes.diagnostics.os.name", "posix"),
+    ):
+        response = client.post(
+            "/admin/diagnostics",
+            data={"host": "127.0.0.1; sleep 600"},
+        )
+
     assert response.status_code == 504
     body = response.get_json()
     assert body is not None

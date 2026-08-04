@@ -50,11 +50,20 @@ def carrier_connectivity_check():
     try:
         stdout, stderr = process.communicate(timeout=PING_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        # H10: return a clean JSON error instead of an uncaught 500.
-        if os.name == "posix":
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        else:
-            process.kill()
+        # H10: return a clean JSON error instead of an uncaught 500. The
+        # kill itself must not be able to raise past this point -- the
+        # process may have already exited/been reaped between the
+        # timeout firing and here (ProcessLookupError), or the group id
+        # may otherwise be gone (PermissionError under a hardened
+        # container) -- either way the goal ("make sure nothing from
+        # this request is left running") already holds, so swallow it.
+        try:
+            if os.name == "posix":
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            else:
+                process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
         process.communicate()  # reap, avoid a zombie
         return jsonify({"error": "diagnostics command timed out"}), 504
 
