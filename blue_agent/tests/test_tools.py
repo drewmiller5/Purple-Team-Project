@@ -11,22 +11,22 @@ def test_tool_schemas_include_exactly_two_tools():
 
 def test_dispatch_escalate_response_lock_account_posts_to_lock_account_endpoint():
     http = MagicMock()
-    http.request.return_value = {"status_code": 200, "body": '{"locked": "admin"}'}
+    http.request.return_value = {"status_code": 200, "body": '{"locked": "jsmith"}'}
     state = MagicMock()
 
     call = {
         "function": {
             "name": "escalate_response",
-            "arguments": {"action": "lock_account", "target": "admin"},
+            "arguments": {"action": "lock_account", "target": "jsmith"},
         }
     }
     result = dispatch_tool_call(call, http=http, state=state)
 
     http.request.assert_called_once_with(
-        method="POST", path="/internal/lock-account", data={"username": "admin"}
+        method="POST", path="/internal/lock-account", data={"username": "jsmith"}
     )
     state.log_event.assert_called_once()
-    assert json.loads(result) == {"status_code": 200, "body": '{"locked": "admin"}'}
+    assert json.loads(result) == {"status_code": 200, "body": '{"locked": "jsmith"}'}
 
 
 def test_dispatch_escalate_response_records_finding_on_successful_dispatch():
@@ -35,19 +35,19 @@ def test_dispatch_escalate_response_records_finding_on_successful_dispatch():
     accumulate history across runs, instead of record_finding being a
     permanent no-op with zero call sites outside its own unit test."""
     http = MagicMock()
-    http.request.return_value = {"status_code": 200, "body": '{"locked": "admin"}'}
+    http.request.return_value = {"status_code": 200, "body": '{"locked": "jsmith"}'}
     state = MagicMock()
 
     call = {
         "function": {
             "name": "escalate_response",
-            "arguments": {"action": "lock_account", "target": "admin"},
+            "arguments": {"action": "lock_account", "target": "jsmith"},
         }
     }
     dispatch_tool_call(call, http=http, state=state)
 
     state.record_finding.assert_called_once_with(
-        "lock_account", "lock_account on admin", True
+        "lock_account", "lock_account on jsmith", True
     )
 
 
@@ -81,13 +81,13 @@ def test_dispatch_escalate_response_records_failed_finding_on_non_2xx_status():
     call = {
         "function": {
             "name": "escalate_response",
-            "arguments": {"action": "kill_session", "target": "1"},
+            "arguments": {"action": "kill_session", "target": "2"},
         }
     }
     dispatch_tool_call(call, http=http, state=state)
 
     state.record_finding.assert_called_once_with(
-        "kill_session", "kill_session on 1", False
+        "kill_session", "kill_session on 2", False
     )
 
 
@@ -117,13 +117,13 @@ def test_dispatch_escalate_response_kill_session_posts_to_kill_session_endpoint(
     call = {
         "function": {
             "name": "escalate_response",
-            "arguments": {"action": "kill_session", "target": "1"},
+            "arguments": {"action": "kill_session", "target": "2"},
         }
     }
     dispatch_tool_call(call, http=http, state=state)
 
     http.request.assert_called_once_with(
-        method="POST", path="/internal/kill-session", data={"user_id": "1"}
+        method="POST", path="/internal/kill-session", data={"user_id": "2"}
     )
 
 
@@ -153,13 +153,13 @@ def test_dispatch_escalate_response_parses_string_arguments():
     call = {
         "function": {
             "name": "escalate_response",
-            "arguments": json.dumps({"action": "lock_account", "target": "admin"}),
+            "arguments": json.dumps({"action": "lock_account", "target": "jsmith"}),
         }
     }
     dispatch_tool_call(call, http=http, state=state)
 
     http.request.assert_called_once_with(
-        method="POST", path="/internal/lock-account", data={"username": "admin"}
+        method="POST", path="/internal/lock-account", data={"username": "jsmith"}
     )
 
 
@@ -231,6 +231,134 @@ def test_dispatch_escalate_response_block_ip_rejects_literal_infra_hostname_targ
 
     http.request.assert_not_called()
     assert json.loads(result) == {"error": "target is protected infrastructure, refusing to dispatch"}
+
+
+def test_dispatch_escalate_response_lock_account_rejects_admin_target():
+    """H51: a prompt-injected blue_agent must not be able to permanently
+    lock out the admin account, which is also red's designed win path
+    (admin login -> /admin/diagnostics). Rejected before dispatch, same
+    pattern as block_ip's infra-denylist.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "lock_account", "target": "admin"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "target is a protected account, refusing to dispatch"}
+    state.log_event.assert_called_once()
+    logged = state.log_event.call_args[0][0]
+    assert logged["phase"] == "escalation_rejected"
+    assert logged["action"] == "lock_account"
+    assert logged["target"] == "admin"
+    state.record_finding.assert_not_called()
+
+
+def test_dispatch_escalate_response_kill_session_rejects_admin_user_id():
+    """H51, kill_session's equivalent of the lock_account admin-protection
+    test above. kill_session targets by numeric user_id, not username --
+    admin is seeded first in target/db.py's AUTOINCREMENT users table, so
+    its user_id is deterministically "1" for any fresh deployment.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "kill_session", "target": "1"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "target is a protected account, refusing to dispatch"}
+    state.record_finding.assert_not_called()
+
+
+def test_dispatch_escalate_response_lock_account_accepts_non_admin_target():
+    """No regression: a non-admin username must still dispatch normally."""
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": "{}"}
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "lock_account", "target": "jsmith"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_called_once_with(
+        method="POST", path="/internal/lock-account", data={"username": "jsmith"}
+    )
+
+
+def test_dispatch_escalate_response_kill_session_accepts_non_admin_user_id():
+    """No regression: a non-admin numeric user_id must still dispatch normally."""
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": "{}"}
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "kill_session", "target": "2"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_called_once_with(
+        method="POST", path="/internal/kill-session", data={"user_id": "2"}
+    )
+
+
+def test_dispatch_escalate_response_lock_account_rejects_empty_username():
+    """H23: target's server-side already rejects an empty/whitespace-only
+    username (H13). Add the same class of check client-side in blue_agent
+    as defense-in-depth, matching kill_session's existing numeric
+    validation below.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "lock_account", "target": "   "},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "username is required, refusing to dispatch"}
+
+
+def test_dispatch_escalate_response_kill_session_rejects_non_numeric_user_id():
+    """H23: kill_session's user_id is already validated numeric server-side
+    (target/routes/internal.py's request.form.get(..., type=int)) -- add
+    the same class of check client-side as defense-in-depth.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "kill_session", "target": "not-a-number"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert json.loads(result) == {"error": "user_id must be numeric, refusing to dispatch"}
 
 
 def test_dispatch_escalate_response_unknown_action_returns_error():

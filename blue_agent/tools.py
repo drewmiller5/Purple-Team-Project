@@ -78,6 +78,22 @@ def _is_protected_block_ip_target(target: str) -> bool:
     return target in _protected_block_ip_targets()
 
 
+# H51 (2026-08-01 user decision): a narrower check than a full app-level
+# infra-identity concept -- reject lock_account/kill_session calls that
+# target the one seeded privileged account specifically, mirroring
+# block_ip's own hardcoded-identifier pattern above rather than
+# fabricating identity semantics that don't exist elsewhere in the
+# codebase. lock_account targets by username ("admin" directly);
+# kill_session targets by numeric user_id -- admin is seeded first in
+# target/db.py's AUTOINCREMENT users table, so its user_id is
+# deterministically "1" for any fresh deployment.
+_PROTECTED_ACCOUNT_TARGETS = {"lock_account": "admin", "kill_session": "1"}
+
+
+def _is_protected_account_target(action: str, target: str) -> bool:
+    return _PROTECTED_ACCOUNT_TARGETS.get(action) == target
+
+
 def dispatch_tool_call(call: dict, http, state) -> str:
     name = call["function"]["name"]
     args = call["function"].get("arguments", {})
@@ -103,6 +119,42 @@ def dispatch_tool_call(call: dict, http, state) -> str:
                 "reason": "protected infrastructure target",
             })
             return json.dumps({"error": "target is protected infrastructure, refusing to dispatch"})
+
+        # H23: format validation matching what target's server-side already
+        # enforces (client-side defense-in-depth, same class of check the
+        # protected-target check above already applies to this same action
+        # set). lock_account's username has no server-side format check
+        # beyond non-empty (H13); kill_session's user_id is validated
+        # numeric server-side (request.form.get(..., type=int)).
+        if action == "lock_account" and not target.strip():
+            state.log_event({
+                "phase": "escalation_rejected",
+                "action": action,
+                "target": target,
+                "reason": "empty username",
+            })
+            return json.dumps({"error": "username is required, refusing to dispatch"})
+
+        if action == "kill_session":
+            try:
+                int(target)
+            except ValueError:
+                state.log_event({
+                    "phase": "escalation_rejected",
+                    "action": action,
+                    "target": target,
+                    "reason": "non-numeric user_id",
+                })
+                return json.dumps({"error": "user_id must be numeric, refusing to dispatch"})
+
+        if action in ("lock_account", "kill_session") and _is_protected_account_target(action, target):
+            state.log_event({
+                "phase": "escalation_rejected",
+                "action": action,
+                "target": target,
+                "reason": "protected account target",
+            })
+            return json.dumps({"error": "target is a protected account, refusing to dispatch"})
 
         path, field = endpoint
         result = http.request(method="POST", path=path, data={field: target})

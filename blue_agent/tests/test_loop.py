@@ -355,14 +355,14 @@ def test_run_records_finding_to_memory_on_successful_escalate_response(tmp_path)
             "role": "assistant",
             "content": "",
             "tool_calls": [
-                {"function": {"name": "escalate_response", "arguments": {"action": "lock_account", "target": "admin"}}}
+                {"function": {"name": "escalate_response", "arguments": {"action": "lock_account", "target": "jsmith"}}}
             ],
         }
     }
     with patch("blue_agent.loop.OllamaClient") as MockOllama, \
          patch("blue_agent.loop.HttpTool") as MockHttp:
         MockOllama.return_value.chat.return_value = tool_call_response
-        MockHttp.return_value.request.return_value = {"status_code": 200, "body": '{"locked": "admin"}'}
+        MockHttp.return_value.request.return_value = {"status_code": 200, "body": '{"locked": "jsmith"}'}
         run(config)
 
     memory = json.loads(Path(config.memory_path).read_text())
