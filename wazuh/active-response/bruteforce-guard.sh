@@ -71,13 +71,9 @@ REQUEST_LOG="/app/target/logs/requests.jsonl"
 THRESHOLD=5
 WINDOW_SECONDS=120
 LOCK_ACCOUNT_SCRIPT="/var/ossec/active-response/bin/lock-account.sh"
-# Finding #2: bound how much of the log gets scanned per invocation
-# instead of the whole (ever-growing) file. 5000 lines is generous
-# headroom for a threshold of 5 events inside a 120s window even with a
-# lot of interleaved traffic from other endpoints/IPs, while keeping the
-# per-event cost roughly constant rather than growing without bound
-# across a long-running demo.
-TAIL_LINES=5000
+# Finding #2's original TAIL_LINES=5000 cap is GONE as of the H34/H49 fix
+# below -- see that comment for why bounding by line count instead of
+# time was itself the bug.
 
 # Task 8 fix-round (live verification): wazuh-execd writes the AR JSON
 # payload as a single line but does NOT close/EOF its child's stdin
@@ -119,19 +115,67 @@ EVENT_EPOCH=$(echo "$EVENT_TS" | jq -R -r '
 [ -z "${EVENT_EPOCH:-}" ] && exit 0
 CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 
-# Single jq pass: matches rule 100103's own field conditions exactly
-# (status_code==200, form_params.username present) scoped to this source
-# IP, converts each candidate line's own timestamp to epoch, and keeps
-# only the ones inside the event-anchored window -- no per-line `date`
-# subprocess, no full-file scan (bounded by `tail` above).
-COUNT=$(tail -n "$TAIL_LINES" "$REQUEST_LOG" 2>/dev/null | jq -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
-    select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
-           and .status_code == 200 and .form_params.username != null)
-    | .timestamp
-    | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-    | fromdateiso8601
-    | select(. >= $cutoff)
-' 2>/dev/null | wc -l | tr -d ' ')
+# H34/H49 fix (Phase 3 Task 5). Two related bugs in the old version of
+# this block:
+#   - H49: the old `tail -n 5000 "$REQUEST_LOG" | jq ...` capped the
+#     scanned window by LINE COUNT, not time. Since target logs every
+#     request unconditionally with no rate limiting, an attacker could
+#     interleave 5000+ decoy requests to any unrelated endpoint inside
+#     the real 120s threshold window, pushing their own genuine
+#     correlated login attempts out of the visible tail before this
+#     script ever counted them -- COUNT came back under threshold and
+#     the lockout silently never fired, no matter how many real matching
+#     events actually occurred.
+#   - H34: the jq pipeline's exit status was invisible -- piping into
+#     `wc -l` means the pipeline's exit status (no `pipefail` in
+#     /bin/sh) is `wc -l`'s, always 0. A malformed line mid-window making
+#     jq error out (`2>/dev/null` hid the message) could silently
+#     produce an undercounted COUNT from jq's partial output instead of
+#     being detected.
+# Fixed by scoping strictly by TIME instead of line position: jq reads
+# $REQUEST_LOG directly with no tail truncation, so a real burst can
+# never be starved out of view by decoy volume (every line's own
+# timestamp is checked against the event-anchored cutoff, not its
+# position from EOF) -- and jq computes the count itself via `length`,
+# so it is the only command in this assignment: $? right below is
+# genuinely jq's own exit status, not swallowed by a later pipe stage.
+# A non-zero exit (malformed line, unexpected shape) is now logged to
+# active-responses.log and the script exits 1 -- it refuses to report a
+# below-threshold count it can't actually vouch for.
+#
+# ponytail: full linear scan of $REQUEST_LOG on every invocation (this
+# fires on every POST to /admin/login) -- O(log size) per event instead
+# of the old O(5000). Fine at this lab's traffic volumes; if request
+# volume in a round ever makes this a real bottleneck, a byte-offset
+# checkpoint (skip content already known to be older than any possible
+# future window) would bound it without reintroducing H49's starvation
+# bug.
+# Note: the jq call's exit status is captured via the `if`/`else` form,
+# not a bare `COUNT=$(...); JQ_STATUS=$?` -- under `set -eu`, a plain
+# failing command substitution would abort the script on the spot
+# (POSIX's `-e` semantics), which would skip the error handling below
+# entirely. Testing a command as an `if` condition is the one place
+# POSIX explicitly exempts from `-e`, so this is the only shape that
+# lets a failing jq surface as a checked, logged condition instead of
+# silently killing the script before JQ_STATUS is ever read.
+if COUNT=$(jq -s -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
+    map(select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
+               and .status_code == 200 and .form_params.username != null)
+        | .timestamp
+        | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+        | fromdateiso8601
+        | select(. >= $cutoff))
+    | length
+' "$REQUEST_LOG" 2>/dev/null); then
+    JQ_STATUS=0
+else
+    JQ_STATUS=$?
+fi
+
+if [ "$JQ_STATUS" -ne 0 ]; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/bruteforce-guard: jq counting pipeline failed (exit=${JQ_STATUS}) for srcip=${SRCIP} -- cannot verify threshold, refusing to report a below-threshold count" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 if [ "$COUNT" -lt "$THRESHOLD" ]; then
     exit 0

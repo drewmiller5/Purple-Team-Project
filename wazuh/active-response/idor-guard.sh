@@ -106,10 +106,10 @@ set -eu
 REQUEST_LOG="/app/target/logs/requests.jsonl"
 THRESHOLD=5
 WINDOW_SECONDS=60
-# Finding #2: bound how much of the log gets scanned per invocation
-# instead of the whole (ever-growing) file -- see bruteforce-guard.sh for
-# the full rationale.
-TAIL_LINES=5000
+# Finding #2's original TAIL_LINES=5000 cap is GONE as of the H34/H49 fix
+# below -- see bruteforce-guard.sh's matching comment (same root cause,
+# same fix, both scripts) for why bounding by line count instead of time
+# was itself the bug.
 # Fix round 1 finding #4: per-source-IP count of real blocks this script
 # has inserted but not yet reversed. /tmp is used deliberately -- it is
 # NOT part of any bind mount back to the host repo (unlike
@@ -189,17 +189,54 @@ EVENT_EPOCH=$(echo "$EVENT_TS" | jq -R -r '
 [ -z "${EVENT_EPOCH:-}" ] && exit 0
 CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 
-# Single jq pass over a bounded tail of the log: matches rule 100105's
-# own field conditions, scoped to this source IP, filtered to the
-# event-anchored window -- no per-line `date` subprocess, no full-file
-# scan.
-COUNT=$(tail -n "$TAIL_LINES" "$REQUEST_LOG" 2>/dev/null | jq -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
-    select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
-    | .timestamp
-    | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-    | fromdateiso8601
-    | select(. >= $cutoff)
-' 2>/dev/null | wc -l | tr -d ' ')
+# H34/H49 fix (Phase 3 Task 5) -- same root cause and same fix as
+# bruteforce-guard.sh's matching block, applied here:
+#   - H49: the old `tail -n 5000 | jq ...` capped the scanned window by
+#     LINE COUNT, not time. Since target logs every request
+#     unconditionally with no rate limiting, an attacker could interleave
+#     5000+ decoy GETs to any unrelated endpoint inside the real 60s
+#     threshold window, pushing their own genuine correlated IDOR probes
+#     out of the visible tail before this script ever counted them.
+#   - H34: piping jq's output into `wc -l` hid jq's own exit status
+#     behind `wc -l`'s (always 0, no `pipefail` in /bin/sh) -- a
+#     malformed line making jq error out mid-window could silently yield
+#     an undercounted COUNT instead of being detected.
+# Fixed the same way: jq reads $REQUEST_LOG directly (no tail
+# truncation -- a real burst can't be starved out of view by decoy
+# volume), computes the count itself via `length` so it's the only
+# command in this assignment (the $? check right below is genuinely
+# jq's own exit status), and a non-zero exit is logged to
+# active-responses.log and treated as a hard failure (exit 1) rather
+# than a silent "below threshold."
+#
+# ponytail: full linear scan of $REQUEST_LOG per invocation (fires on
+# every GET to /documents/<id>) -- see bruteforce-guard.sh's matching
+# note for the accepted cost/ceiling and upgrade path.
+# Note: the jq call's exit status is captured via the `if`/`else` form,
+# not a bare `COUNT=$(...); JQ_STATUS=$?` -- under `set -eu`, a plain
+# failing command substitution would abort the script on the spot
+# (POSIX's `-e` semantics), which would skip the error handling below
+# entirely. Testing a command as an `if` condition is the one place
+# POSIX explicitly exempts from `-e`, so this is the only shape that
+# lets a failing jq surface as a checked, logged condition instead of
+# silently killing the script before JQ_STATUS is ever read.
+if COUNT=$(jq -s -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
+    map(select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
+        | .timestamp
+        | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+        | fromdateiso8601
+        | select(. >= $cutoff))
+    | length
+' "$REQUEST_LOG" 2>/dev/null); then
+    JQ_STATUS=0
+else
+    JQ_STATUS=$?
+fi
+
+if [ "$JQ_STATUS" -ne 0 ]; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: jq counting pipeline failed (exit=${JQ_STATUS}) for srcip=${SRCIP} -- cannot verify threshold, refusing to report a below-threshold count" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 if [ "$COUNT" -lt "$THRESHOLD" ]; then
     exit 0
