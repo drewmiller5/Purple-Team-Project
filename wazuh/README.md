@@ -12,10 +12,16 @@ $ docker-compose -f generate-indexer-certs.yml run --rm generator
 ```
 
 **Do not commit the generated private keys.** `root-ca.key` and
-`root-ca-manager.key` under `config/wazuh_indexer_ssl_certs/` are no longer
-tracked in git (`*.key` is in the repo's `.gitignore`) -- this step
-regenerates them locally, and each clone/deploy should run it and get its
-own root CA rather than reuse someone else's key material.
+`root-ca-manager.key`, plus every `*-key.pem` file (`admin-key.pem`,
+`wazuh.manager-key.pem`, `wazuh.indexer-key.pem`, `wazuh.dashboard-key.pem`)
+under `config/wazuh_indexer_ssl_certs/`, are no longer tracked in git
+(`*.key` and `*-key.pem` are both in the repo's `.gitignore`) -- this step
+regenerates all of them locally, and each clone/deploy should run it and
+get its own root CA and per-service keys rather than reuse someone else's
+key material. The corresponding `*.pem` certificate files (not `-key.pem`)
+are plain certs, not secrets, and stay committed so a fresh clone has a
+working, internally-consistent cert bundle without needing to regenerate
+before first boot.
 
 3) Start the environment with docker-compose:
 

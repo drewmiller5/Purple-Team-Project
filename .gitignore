@@ -7,3 +7,7 @@ target/logs/*.jsonl
 Pipfile.lock
 .worktrees/
 *.key
+# H47 follow-up: Wazuh's cert generator also emits per-service private
+# keys under a *-key.pem naming convention (not *.key) -- these are real
+# private key material too, just missed by the pattern above.
+*-key.pem
