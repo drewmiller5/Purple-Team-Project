@@ -285,7 +285,7 @@ PAGE = """
         <label>Action
           <select name="action">
             <option value="lock_account">Lock account (username)</option>
-            <option value="kill_session">Kill session (user_id)</option>
+            <option value="kill_session">Lock account permanently (user_id)</option>
             <option value="block_ip">Block IP (source_ip)</option>
           </select>
         </label>

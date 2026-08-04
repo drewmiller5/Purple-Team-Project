@@ -44,20 +44,33 @@ def _protected_source_ips():
 
     # Docker exposes the bridge gateway as the default route in the target
     # container. Read it rather than assuming a compose-assigned subnet.
+    route_resolved = True
     try:
         with open("/proc/net/route", encoding="utf-8") as routes:
+            found_default_route = False
             for route in routes:
                 fields = route.split()
                 if len(fields) >= 3 and fields[1] == "00000000":
-                    protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
+                    try:
+                        protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
+                        found_default_route = True
+                    except ValueError:
+                        pass
                     break
-    except (OSError, ValueError):
+            if not found_default_route:
+                # The route table is readable but has no default route yet --
+                # a startup race (the container's networking hasn't finished
+                # coming up), not a permanent property of the environment.
+                # Same failure class as a DNS gaierror: don't cache this
+                # result, let the next call retry.
+                route_resolved = False
+    except OSError:
         # Expected and permanent on non-Linux dev/test environments (no
-        # /proc/net/route at all) -- unlike a DNS gaierror, this will
+        # /proc/net/route at all) -- unlike a startup race, this will
         # never self-correct by retrying, so it doesn't gate caching.
         pass
 
-    if resolved_all:
+    if resolved_all and route_resolved:
         _protected_source_ips.cache = protected
     return protected
 

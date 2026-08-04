@@ -1,4 +1,5 @@
 # target/tests/test_internal_routes.py
+import io
 import socket
 from unittest.mock import patch
 
@@ -264,6 +265,42 @@ def test_protected_source_ips_does_not_cache_a_degraded_result_after_dns_failure
         assert "10.0.0.9" in recovered
         # A degraded result must not have been cached -- this second call
         # has to actually retry DNS, not skip straight to a stale result.
+        assert mock_lookup.call_count == 4
+    finally:
+        internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_does_not_cache_a_missing_default_route(tmp_path):
+    # Security-reviewer-flagged gap in the fix above: /proc/net/route's
+    # OSError/ValueError guard only covers the file being entirely absent
+    # (permanent, e.g. non-Linux dev boxes). If the file is readable but
+    # the container's default route simply hasn't been programmed into
+    # the kernel routing table yet -- a startup race, same class of
+    # problem as an unresolvable hostname -- no exception is raised at
+    # all; the loop just finds nothing. That outcome must not be cached
+    # either, or the allowlist permanently loses the Docker bridge
+    # gateway protection.
+    from target.routes import internal
+
+    no_default_route = "Iface\tDestination\tGateway\n" "eth0\t0002000A\t00000000\n"
+    has_default_route = "Iface\tDestination\tGateway\n" "eth0\t00000000\t0100A8C0\n"
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
+            "target.routes.internal.open", return_value=io.StringIO(no_default_route)
+        ):
+            degraded = internal._protected_source_ips()
+        assert "192.168.0.1" not in degraded
+
+        with patch(
+            "target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"
+        ) as mock_lookup, patch("target.routes.internal.open", return_value=io.StringIO(has_default_route)):
+            recovered = internal._protected_source_ips()
+        assert "192.168.0.1" in recovered
+        # A degraded result must not have been cached -- this second call
+        # has to actually re-run DNS (and re-read the route table), not
+        # skip straight to a stale result.
         assert mock_lookup.call_count == 4
     finally:
         internal._protected_source_ips.cache_clear()

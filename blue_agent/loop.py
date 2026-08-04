@@ -16,7 +16,7 @@ anything yourself -- your job is to interpret alerts as they arrive and
 decide how to respond.
 
 Wazuh's own Active Response already fires automatically for every alert
-(network-level IP bans, account locks, session kills). You see the same
+(network-level IP bans, account locks, permanent account lockouts). You see the same
 alerts a moment after they fire. For each new alert, decide: does Wazuh's
 automatic response look sufficient for what you're seeing (hold), or does
 the pattern across several alerts justify a stronger action right now
