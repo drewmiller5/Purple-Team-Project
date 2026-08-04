@@ -304,3 +304,55 @@ def test_protected_source_ips_does_not_cache_a_missing_default_route(tmp_path):
         assert mock_lookup.call_count == 4
     finally:
         internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_does_not_cache_after_a_transient_route_read_error(tmp_path):
+    # Second security-reviewer-flagged gap: treating every OSError from
+    # opening /proc/net/route as "permanent, doesn't gate caching" is too
+    # broad. Only a missing file (FileNotFoundError, e.g. non-Linux dev
+    # boxes) is actually permanent. A PermissionError or other transient
+    # I/O error is the same class of problem as a startup DNS race and
+    # must not get baked into the cache either.
+    from target.routes import internal
+
+    has_default_route = "Iface\tDestination\tGateway\n" "eth0\t00000000\t0100A8C0\n"
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
+            "target.routes.internal.open", side_effect=PermissionError
+        ):
+            degraded = internal._protected_source_ips()
+        assert "192.168.0.1" not in degraded
+
+        with patch(
+            "target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"
+        ) as mock_lookup, patch("target.routes.internal.open", return_value=io.StringIO(has_default_route)):
+            recovered = internal._protected_source_ips()
+        assert "192.168.0.1" in recovered
+        assert mock_lookup.call_count == 4
+    finally:
+        internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_skips_a_malformed_default_route_line_and_checks_later_lines(tmp_path):
+    # Second half of the same finding: the route-matching loop broke
+    # unconditionally on the first Destination==00000000 line, even when
+    # that line's gateway field failed to parse. On a route table with
+    # more than one default-route-shaped line (policy routing), a
+    # malformed first match would permanently hide a valid later one.
+    from target.routes import internal
+
+    first_line_malformed = (
+        "Iface\tDestination\tGateway\n" "eth0\t00000000\tZZZZZZZZ\n" "eth1\t00000000\t0100A8C0\n"
+    )
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
+            "target.routes.internal.open", return_value=io.StringIO(first_line_malformed)
+        ):
+            result = internal._protected_source_ips()
+        assert "192.168.0.1" in result
+    finally:
+        internal._protected_source_ips.cache_clear()

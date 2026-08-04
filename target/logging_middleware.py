@@ -79,7 +79,7 @@ def register_logging(app, log_path: str = None):
             # session (not a request attribute -- unauthenticated requests
             # log this as null). Makes the acting user available to Active
             # Response scripts like kill-session.sh, which parse it out of
-            # the alert JSON to know which session to kill.
+            # the alert JSON to know which account to lock permanently.
             "user_id": session.get("user_id"),
         }
         with _log_write_lock:

@@ -67,7 +67,7 @@ HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://target:5000/
 
 case "$HTTP_STATUS" in
     2??)
-        echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: killed session for user_id=${USER_ID} (http_status=${HTTP_STATUS})" >> /var/ossec/logs/active-responses.log
+        echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: locked account permanently for user_id=${USER_ID} (http_status=${HTTP_STATUS})" >> /var/ossec/logs/active-responses.log
         ;;
     *)
         echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: target returned http_status=${HTTP_STATUS} for user_id=${USER_ID}" >> /var/ossec/logs/active-responses.log

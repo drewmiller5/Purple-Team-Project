@@ -54,21 +54,32 @@ def _protected_source_ips():
                     try:
                         protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
                         found_default_route = True
-                    except ValueError:
-                        pass
-                    break
+                        break
+                    except (ValueError, OverflowError):
+                        # This line's gateway field didn't parse -- keep
+                        # scanning in case a later line (policy routing can
+                        # produce more than one Destination==00000000 row)
+                        # is well-formed, instead of giving up on the first.
+                        continue
             if not found_default_route:
-                # The route table is readable but has no default route yet --
-                # a startup race (the container's networking hasn't finished
-                # coming up), not a permanent property of the environment.
-                # Same failure class as a DNS gaierror: don't cache this
-                # result, let the next call retry.
+                # The route table is readable but has no (parseable) default
+                # route yet -- a startup race (the container's networking
+                # hasn't finished coming up), not a permanent property of the
+                # environment. Same failure class as a DNS gaierror: don't
+                # cache this result, let the next call retry.
                 route_resolved = False
-    except OSError:
+    except FileNotFoundError:
         # Expected and permanent on non-Linux dev/test environments (no
         # /proc/net/route at all) -- unlike a startup race, this will
         # never self-correct by retrying, so it doesn't gate caching.
         pass
+    except OSError:
+        # Any other OSError (e.g. a permission error, or a transient I/O
+        # failure while procfs is still coming up) isn't guaranteed
+        # permanent the way a missing file is -- treat it like a startup
+        # race and let the next call retry rather than caching a result
+        # that's missing the gateway protection.
+        route_resolved = False
 
     if resolved_all and route_resolved:
         _protected_source_ips.cache = protected
