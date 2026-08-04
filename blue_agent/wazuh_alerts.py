@@ -3,31 +3,41 @@ from pathlib import Path
 
 
 class WazuhAlertsReader:
-    def __init__(self, alerts_path: str):
+    def __init__(self, alerts_path: str, state=None):
         self.alerts_path = alerts_path
-        self._lines_read = 0
+        self.state = state
+        self._offset = 0
 
     def poll_new_alerts(self) -> list:
         path = Path(self.alerts_path)
         if not path.exists():
             return []
 
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        file_size = path.stat().st_size
+
+        # H19: position is a byte offset, not a line count. If the file was
+        # rotated/truncated shorter than our last position, the old offset
+        # now points past EOF -- reset to the start and log the recovery
+        # instead of silently returning [] forever.
+        if self._offset > file_size:
+            self._log_rotation(file_size)
+            self._offset = 0
+
+        # H24: seek to the stored offset and read only the new bytes,
+        # instead of re-reading and re-parsing the whole file every poll.
+        with open(path, "rb") as f:
+            f.seek(self._offset)
+            new_bytes = f.read()
 
         # A trailing line with no newline means the writer may still be
         # mid-write on it -- don't mark it "read" until it's complete, or a
         # line that finishes between polls would be silently skipped forever.
-        if lines and not lines[-1].endswith("\n"):
-            complete_lines = lines[:-1]
-        else:
-            complete_lines = lines
-
-        new_lines = complete_lines[self._lines_read:]
-        self._lines_read = len(complete_lines)
+        last_newline = new_bytes.rfind(b"\n")
+        complete_bytes = new_bytes[: last_newline + 1] if last_newline != -1 else b""
+        self._offset += len(complete_bytes)
 
         alerts = []
-        for line in new_lines:
+        for line in complete_bytes.decode("utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -36,3 +46,15 @@ class WazuhAlertsReader:
             except json.JSONDecodeError:
                 continue
         return alerts
+
+    def _log_rotation(self, new_size: int) -> None:
+        event = {
+            "phase": "alerts_file_rotated",
+            "path": self.alerts_path,
+            "previous_offset": self._offset,
+            "new_size": new_size,
+        }
+        if self.state is not None:
+            self.state.log_event(event)
+        else:
+            print(f"[wazuh_alerts] alerts file rotated/truncated, resetting read position: {event}")

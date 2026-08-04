@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from blue_agent.wazuh_alerts import WazuhAlertsReader
 
 
@@ -80,3 +82,58 @@ def test_poll_new_alerts_does_not_consume_incomplete_trailing_line(tmp_path):
     assert len(alerts) == 2
     assert alerts[0]["rule"]["id"] == "2"
     assert alerts[1]["rule"]["id"] == "3"
+
+
+def test_poll_new_alerts_recovers_from_truncation_or_rotation(tmp_path):
+    """H19: position must be tracked as a byte offset, not a line count.
+    If the alerts file is rotated/truncated shorter than the previously
+    read position, the reader must detect that (stored offset > current
+    file size) and reset to the start instead of silently returning []
+    forever -- which would make blue_agent look alive (still heartbeating)
+    while it has permanently stopped seeing new alerts.
+    """
+    path = tmp_path / "alerts.json"
+    path.write_text(
+        '{"rule": {"id": "1"}}\n{"rule": {"id": "2"}}\n{"rule": {"id": "3"}}\n',
+        encoding="utf-8",
+    )
+
+    reader = WazuhAlertsReader(str(path))
+    first_batch = reader.poll_new_alerts()
+    assert len(first_batch) == 3
+
+    # Simulate log rotation: the file gets replaced with much shorter
+    # content, so the previously stored byte offset now points past EOF.
+    path.write_text('{"rule": {"id": "100"}}\n', encoding="utf-8")
+
+    second_batch = reader.poll_new_alerts()
+    assert len(second_batch) == 1
+    assert second_batch[0]["rule"]["id"] == "100"
+
+    # And polling reads only NEW content from then on, not from byte 0.
+    with open(path, "a", encoding="utf-8") as f:
+        f.write('{"rule": {"id": "101"}}\n')
+    third_batch = reader.poll_new_alerts()
+    assert len(third_batch) == 1
+    assert third_batch[0]["rule"]["id"] == "101"
+
+
+def test_poll_new_alerts_logs_rotation_recovery_via_state(tmp_path):
+    """H19/H24: when a state/logger is supplied, rotation recovery must be
+    logged using the established state.log_event pattern (see
+    blue_agent/state.py, blue_agent/loop.py) so the recovery is visible in
+    the event log rather than silent.
+    """
+    path = tmp_path / "alerts.json"
+    path.write_text('{"rule": {"id": "1"}}\n{"rule": {"id": "2"}}\n', encoding="utf-8")
+
+    state = MagicMock()
+    reader = WazuhAlertsReader(str(path), state=state)
+    reader.poll_new_alerts()
+
+    path.write_text('{"rule": {"id": "9"}}\n', encoding="utf-8")
+    reader.poll_new_alerts()
+
+    state.log_event.assert_called_once()
+    logged = state.log_event.call_args[0][0]
+    assert logged["phase"] == "alerts_file_rotated"

@@ -65,7 +65,7 @@ def run(config) -> None:
     # referee never writes go.flag until it sees a blue heartbeat -- permanent deadlock.
     http = HttpTool(config.target_base_url)
     ollama = OllamaClient(config.ollama_host, config.ollama_model)
-    alerts_reader = WazuhAlertsReader(config.alerts_log_path)
+    alerts_reader = WazuhAlertsReader(config.alerts_log_path, state=state)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(base_url=config.target_base_url)}
