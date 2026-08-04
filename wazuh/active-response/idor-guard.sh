@@ -203,11 +203,24 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 #     an undercounted COUNT instead of being detected.
 # Fixed the same way: jq reads $REQUEST_LOG directly (no tail
 # truncation -- a real burst can't be starved out of view by decoy
-# volume), computes the count itself via `length` so it's the only
-# command in this assignment (the $? check right below is genuinely
-# jq's own exit status), and a non-zero exit is logged to
-# active-responses.log and treated as a hard failure (exit 1) rather
-# than a silent "below threshold."
+# volume).
+#
+# Regression found in dual review of the fix above (commit 56a72bb) --
+# same root cause and same fix as bruteforce-guard.sh's matching block:
+# the first version of this fix used `jq -s` (slurp mode), which
+# requires the file's ENTIRE content to parse as valid JSON before it
+# can build the array to filter/count at all. Since $REQUEST_LOG is
+# explicitly append-only and never rotated, a single malformed line
+# ANYWHERE in the log's history -- not just inside the current window --
+# would make every future invocation of this script fail, permanently,
+# for the rest of the round: worse than the original H34 bug, which at
+# least self-healed once the bad line aged out of the old tail-n-5000
+# window. Fixed by reading the file as raw lines (`-R`, `-n`+`inputs`)
+# and parsing each one independently with `try fromjson catch empty` --
+# a malformed line simply produces no value and is skipped, instead of
+# aborting the whole scan. jq's own exit status is still meaningful here
+# (JQ_STATUS below): it now only goes non-zero for a genuinely fatal
+# condition, not for content that was merely malformed.
 #
 # ponytail: full linear scan of $REQUEST_LOG per invocation (fires on
 # every GET to /documents/<id>) -- see bruteforce-guard.sh's matching
@@ -220,13 +233,15 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # POSIX explicitly exempts from `-e`, so this is the only shape that
 # lets a failing jq surface as a checked, logged condition instead of
 # silently killing the script before JQ_STATUS is ever read.
-if COUNT=$(jq -s -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
-    map(select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
-        | .timestamp
-        | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-        | fromdateiso8601
-        | select(. >= $cutoff))
-    | length
+if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
+    [ inputs
+      | (try fromjson catch empty)
+      | select(.method == "GET" and (.path | test("^/documents/[0-9]+$")) and .remote_addr == $ip)
+      | .timestamp
+      | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+      | fromdateiso8601
+      | select(. >= $cutoff)
+    ] | length
 ' "$REQUEST_LOG" 2>/dev/null); then
     JQ_STATUS=0
 else

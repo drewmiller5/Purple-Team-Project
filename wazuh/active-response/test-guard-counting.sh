@@ -8,16 +8,31 @@
 # running manager instead, per the ledger) -- this fills that gap with a
 # minimal, self-contained script instead of introducing a new framework.
 #
-# Strategy: run BOTH the pre-fix version of each script (fetched from git
-# HEAD, the parent commit before this fix) and the current, fixed version
-# against the same crafted requests.jsonl + AR stdin payload, and assert
-# the two diverge exactly the way H34/H49 predict:
+# Strategy: run scripts fetched from EXPLICIT, PINNED git commits against
+# the same crafted requests.jsonl + AR stdin payload, and assert behavior
+# diverges exactly the way each fix predicts:
 #   - H49 (window starvation): 6000 decoy lines pushed in front of 5 real
 #     matching lines defeats the old `tail -n 5000` cap (real matches
-#     fall outside the tail) but not the new time-scoped full-file scan.
+#     fall outside the tail) but not a time-scoped full-file scan.
 #   - H34 (silent jq failure): a malformed line mid-window makes the old
-#     streaming jq pipeline undercount and exit 0 silently; the new `-s`
-#     pipeline fails atomically, is detected via $?, and is logged.
+#     streaming jq pipeline undercount and exit 0 silently; a fixed
+#     pipeline detects the failure via $? and logs it.
+#   - Regression found in dual review of the H34/H49 fix itself (commit
+#     56a72bb): that fix's `jq -s` full-file slurp requires the ENTIRE,
+#     never-rotated request log to parse cleanly on every invocation --
+#     one malformed line anywhere in the log's history (not just the
+#     current window) permanently breaks counting for both guard scripts
+#     for the rest of the round, once written. Scenario C below proves
+#     this against the pinned 56a72bb commit and proves the re-fix (in
+#     the current working tree) tolerates a stale malformed line by
+#     skipping it instead of failing the whole scan.
+#
+# Fix-review note (code review of 56a72bb/fd3e747): this harness used to
+# fetch its "pre-fix" comparison arm via `git show HEAD:...`, which only
+# worked correctly in the narrow window before 56a72bb was itself merged
+# past HEAD. Every comparison arm below is now pinned to an EXPLICIT
+# commit SHA (never HEAD or a floating ref) specifically so this harness
+# keeps meaning what it says regardless of how much further `main` moves.
 #
 # Usage: sh wazuh/active-response/test-guard-counting.sh
 # Exit 0 and prints "ALL PASS" if every assertion holds; exit 1 on any
@@ -40,21 +55,22 @@ pass() {
     echo "PASS: $1"
 }
 
-# Build a runnable copy of a script (either the current working-tree
-# fixed version, or the git-HEAD pre-fix version) with its hardcoded
-# absolute paths redirected into $WORKDIR so this test doesn't need
-# root, a container, or /app//var/ossec to exist on the test host.
+# Build a runnable copy of a script from an explicit source, with its
+# hardcoded absolute paths redirected into $WORKDIR so this test doesn't
+# need root, a container, or /app//var/ossec to exist on the test host.
 make_runnable_copy() {
     script_name="$1"      # bruteforce-guard.sh | idor-guard.sh
-    source_mode="$2"      # fixed | prefix
+    source_ref="$2"       # "worktree" for the current working-tree file,
+                           # or an explicit, pinned git commit SHA (never
+                           # HEAD or a branch name -- see header note)
     out_path="$3"
     req_log="$4"
     ar_log="$5"
 
-    if [ "$source_mode" = "fixed" ]; then
+    if [ "$source_ref" = "worktree" ]; then
         cat "$REPO_ROOT/wazuh/active-response/$script_name" > "$out_path"
     else
-        (cd "$REPO_ROOT" && git show "HEAD:wazuh/active-response/$script_name") > "$out_path"
+        (cd "$REPO_ROOT" && git show "${source_ref}:wazuh/active-response/$script_name") > "$out_path"
     fi
     # Portable in-place-ish edit: sed to a temp file then move over.
     sed -e "s#/app/target/logs/requests.jsonl#${req_log}#g" \
@@ -63,6 +79,12 @@ make_runnable_copy() {
     mv "${out_path}.tmp" "$out_path"
     chmod +x "$out_path"
 }
+
+# Pinned commits, not floating refs -- see header note. 56a72bb is the
+# H34/H49 fix itself (contains the jq -s poison-pill regression);
+# 56a72bb^ is its immediate parent, the genuine pre-fix baseline.
+PREFIX_COMMIT="56a72bb^"
+REGRESSED_COMMIT="56a72bb"
 
 iso_ts() {
     # $1 = epoch seconds -> Python-isoformat-shaped UTC timestamp, the
@@ -110,8 +132,8 @@ NEW_AR_LOG_A="$WORKDIR/new-active-responses-a.log"
 : > "$OLD_AR_LOG_A"
 : > "$NEW_AR_LOG_A"
 
-make_runnable_copy "bruteforce-guard.sh" "prefix" "$OLD_SCRIPT_A" "$REQ_LOG_A" "$OLD_AR_LOG_A"
-make_runnable_copy "bruteforce-guard.sh" "fixed"  "$NEW_SCRIPT_A" "$REQ_LOG_A" "$NEW_AR_LOG_A"
+make_runnable_copy "bruteforce-guard.sh" "$PREFIX_COMMIT" "$OLD_SCRIPT_A" "$REQ_LOG_A" "$OLD_AR_LOG_A"
+make_runnable_copy "bruteforce-guard.sh" "worktree"       "$NEW_SCRIPT_A" "$REQ_LOG_A" "$NEW_AR_LOG_A"
 
 set +e
 printf '%s\n' "$AR_PAYLOAD_A" | sh "$OLD_SCRIPT_A" >/dev/null 2>&1
@@ -135,14 +157,20 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# Scenario B (H34): malformed line mid-window silently undercounts.
+# Scenario B (H34, 3-way): malformed line INSIDE the counting window.
 # 3 real matches, then 1 malformed (non-JSON) line, then 3 more real
-# matches (6 total, >= THRESHOLD=5 if all were counted). Old streaming
-# jq flushes the pre-crash 3 matches to wc -l before dying on the bad
-# line -> COUNT=3 < 5 -> silent exit 0, nothing logged. New `-s` slurp
-# fails atomically on the same bad line -> exit 1, logged.
+# matches (6 total, >= THRESHOLD=5 if all were counted).
+#   - true pre-fix (PREFIX_COMMIT): old streaming jq flushes the
+#     pre-crash 3 matches to wc -l before dying on the bad line ->
+#     COUNT=3 < 5 -> silent exit 0, nothing logged (the original H34 bug).
+#   - regressed (REGRESSED_COMMIT, 56a72bb): `jq -s` slurp fails
+#     atomically on the same bad line -> exit 1, logged as a hard
+#     failure -- correct detection, but throws away the 6 real matches
+#     along with the 1 bad line.
+#   - fixed (worktree): skips the one malformed line, still counts all 6
+#     real matches, crosses THRESHOLD, and attempts the real block.
 # ---------------------------------------------------------------------
-echo "=== Scenario B: H34 malformed-line undercount (idor-guard.sh) ==="
+echo "=== Scenario B: H34 malformed-line-in-window, 3-way (idor-guard.sh) ==="
 
 REQ_LOG_B="$WORKDIR/requests-b.jsonl"
 : > "$REQ_LOG_B"
@@ -165,34 +193,106 @@ EVENT_TS_B=$(iso_ts "$EVENT_EPOCH_B")
 AR_PAYLOAD_B=$(printf '{"command":"add","parameters":{"alert":{"data":{"srcip":"198.51.100.7","timestamp":"%s"}}}}' "$EVENT_TS_B")
 
 OLD_SCRIPT_B="$WORKDIR/old-idor-guard.sh"
+REGRESSED_SCRIPT_B="$WORKDIR/regressed-idor-guard.sh"
 NEW_SCRIPT_B="$WORKDIR/new-idor-guard.sh"
 OLD_AR_LOG_B="$WORKDIR/old-active-responses-b.log"
+REGRESSED_AR_LOG_B="$WORKDIR/regressed-active-responses-b.log"
 NEW_AR_LOG_B="$WORKDIR/new-active-responses-b.log"
 : > "$OLD_AR_LOG_B"
+: > "$REGRESSED_AR_LOG_B"
 : > "$NEW_AR_LOG_B"
 
-make_runnable_copy "idor-guard.sh" "prefix" "$OLD_SCRIPT_B" "$REQ_LOG_B" "$OLD_AR_LOG_B"
-make_runnable_copy "idor-guard.sh" "fixed"  "$NEW_SCRIPT_B" "$REQ_LOG_B" "$NEW_AR_LOG_B"
+make_runnable_copy "idor-guard.sh" "$PREFIX_COMMIT"    "$OLD_SCRIPT_B"       "$REQ_LOG_B" "$OLD_AR_LOG_B"
+make_runnable_copy "idor-guard.sh" "$REGRESSED_COMMIT" "$REGRESSED_SCRIPT_B" "$REQ_LOG_B" "$REGRESSED_AR_LOG_B"
+make_runnable_copy "idor-guard.sh" "worktree"           "$NEW_SCRIPT_B"       "$REQ_LOG_B" "$NEW_AR_LOG_B"
 
 set +e
 printf '%s\n' "$AR_PAYLOAD_B" | sh "$OLD_SCRIPT_B" >/dev/null 2>&1
 OLD_EXIT_B=$?
+printf '%s\n' "$AR_PAYLOAD_B" | sh "$REGRESSED_SCRIPT_B" >/dev/null 2>&1
+REGRESSED_EXIT_B=$?
 printf '%s\n' "$AR_PAYLOAD_B" | sh "$NEW_SCRIPT_B" >/dev/null 2>&1
 NEW_EXIT_B=$?
 set -e
 
-echo "  old (pre-fix) exit=$OLD_EXIT_B, new (fixed) exit=$NEW_EXIT_B"
+echo "  pre-fix exit=$OLD_EXIT_B, regressed exit=$REGRESSED_EXIT_B, fixed exit=$NEW_EXIT_B"
 
 if [ "$OLD_EXIT_B" -eq 0 ] && [ ! -s "$OLD_AR_LOG_B" ]; then
-    pass "old pre-fix script silently exits 0 with nothing logged (undercounts past the malformed line, exactly the H34 bug)"
+    pass "true pre-fix script silently exits 0 with nothing logged (undercounts past the malformed line, exactly the original H34 bug)"
 else
-    fail "old pre-fix script was expected to exit 0 with an empty log but got exit=$OLD_EXIT_B, log-size=$(wc -c < "$OLD_AR_LOG_B" 2>/dev/null || echo '?')"
+    fail "pre-fix script was expected to exit 0 with an empty log but got exit=$OLD_EXIT_B, log-size=$(wc -c < "$OLD_AR_LOG_B" 2>/dev/null || echo '?')"
 fi
 
-if [ "$NEW_EXIT_B" -ne 0 ] && grep -q "jq counting pipeline failed" "$NEW_AR_LOG_B"; then
-    pass "fixed script detects the jq failure, exits non-zero, and logs it instead of silently reporting below-threshold"
+if [ "$REGRESSED_EXIT_B" -ne 0 ] && grep -q "jq counting pipeline failed" "$REGRESSED_AR_LOG_B"; then
+    pass "regressed (56a72bb) script detects the jq failure and logs it -- correct detection, but discards all 6 real matches along with the 1 bad line"
 else
-    fail "fixed script was expected to exit non-zero and log a jq-failure line, got exit=$NEW_EXIT_B, log=[$(cat "$NEW_AR_LOG_B" 2>/dev/null)]"
+    fail "regressed script was expected to exit non-zero and log a jq-failure line, got exit=$REGRESSED_EXIT_B, log=[$(cat "$REGRESSED_AR_LOG_B" 2>/dev/null)]"
+fi
+
+if [ "$NEW_EXIT_B" -ne 0 ] && ! grep -q "jq counting pipeline failed" "$NEW_AR_LOG_B"; then
+    pass "fixed script skips the one malformed line, still counts all 6 real matches, and attempts the real block (no false jq-failure report)"
+else
+    fail "fixed script was expected to skip the bad line and count the real matches, got exit=$NEW_EXIT_B, log=[$(cat "$NEW_AR_LOG_B" 2>/dev/null)]"
+fi
+
+# ---------------------------------------------------------------------
+# Scenario C (HIGH regression found in dual review of 56a72bb): a STALE
+# malformed line -- written long before the current burst, entirely
+# outside any window that matters now -- permanently blocks ALL future
+# counting under the regression, because `jq -s` must parse the file's
+# ENTIRE history on every invocation regardless of window position.
+# 1 malformed line first, then 5 real matches (all recent, crosses
+# THRESHOLD=5) with nothing between them and the malformed line.
+#   - regressed (56a72bb): fails and logs, even though the bad line is
+#     irrelevant to the current window -- the exact HIGH finding.
+#   - fixed (worktree): skips the stale bad line regardless of its
+#     position, counts the real recent burst, attempts the block.
+# ---------------------------------------------------------------------
+echo "=== Scenario C: stale malformed line permanently poisons counting (bruteforce-guard.sh) ==="
+
+REQ_LOG_C="$WORKDIR/requests-c.jsonl"
+: > "$REQ_LOG_C"
+echo 'this is not valid json either' >> "$REQ_LOG_C"
+i=0
+while [ "$i" -lt 5 ]; do
+    ts=$(iso_ts $((BASE_EPOCH + 10000 + i)))
+    printf '{"path":"/admin/login","method":"POST","remote_addr":"203.0.113.55","status_code":200,"form_params":{"username":"admin"},"timestamp":"%s"}\n' "$ts" >> "$REQ_LOG_C"
+    i=$((i + 1))
+done
+
+EVENT_EPOCH_C=$((BASE_EPOCH + 10004))
+EVENT_TS_C=$(iso_ts "$EVENT_EPOCH_C")
+AR_PAYLOAD_C=$(printf '{"command":"add","parameters":{"alert":{"data":{"srcip":"203.0.113.55","timestamp":"%s"}}}}' "$EVENT_TS_C")
+
+REGRESSED_SCRIPT_C="$WORKDIR/regressed-bruteforce-guard.sh"
+NEW_SCRIPT_C="$WORKDIR/new-bruteforce-guard.sh"
+REGRESSED_AR_LOG_C="$WORKDIR/regressed-active-responses-c.log"
+NEW_AR_LOG_C="$WORKDIR/new-active-responses-c.log"
+: > "$REGRESSED_AR_LOG_C"
+: > "$NEW_AR_LOG_C"
+
+make_runnable_copy "bruteforce-guard.sh" "$REGRESSED_COMMIT" "$REGRESSED_SCRIPT_C" "$REQ_LOG_C" "$REGRESSED_AR_LOG_C"
+make_runnable_copy "bruteforce-guard.sh" "worktree"           "$NEW_SCRIPT_C"       "$REQ_LOG_C" "$NEW_AR_LOG_C"
+
+set +e
+printf '%s\n' "$AR_PAYLOAD_C" | sh "$REGRESSED_SCRIPT_C" >/dev/null 2>&1
+REGRESSED_EXIT_C=$?
+printf '%s\n' "$AR_PAYLOAD_C" | sh "$NEW_SCRIPT_C" >/dev/null 2>&1
+NEW_EXIT_C=$?
+set -e
+
+echo "  regressed (56a72bb) exit=$REGRESSED_EXIT_C, fixed exit=$NEW_EXIT_C"
+
+if [ "$REGRESSED_EXIT_C" -eq 1 ] && grep -q "jq counting pipeline failed" "$REGRESSED_AR_LOG_C"; then
+    pass "regressed (56a72bb) script permanently refuses to count once ANY malformed line exists anywhere in the log, even one that's irrelevant to the current window -- exactly the HIGH regression this fix closes"
+else
+    fail "regressed script was expected to fail with 'jq counting pipeline failed' due to the stale malformed line, got exit=$REGRESSED_EXIT_C, log=[$(cat "$REGRESSED_AR_LOG_C" 2>/dev/null)]"
+fi
+
+if [ "$NEW_EXIT_C" -ne 0 ] && ! grep -q "jq counting pipeline failed" "$NEW_AR_LOG_C"; then
+    pass "fixed script skips the stale malformed line and still correctly counts and escalates the real, recent burst"
+else
+    fail "fixed script was expected to skip the malformed line and attempt escalation, got exit=$NEW_EXIT_C, log=[$(cat "$NEW_AR_LOG_C" 2>/dev/null)]"
 fi
 
 echo

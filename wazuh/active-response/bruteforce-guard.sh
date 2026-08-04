@@ -136,12 +136,26 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # $REQUEST_LOG directly with no tail truncation, so a real burst can
 # never be starved out of view by decoy volume (every line's own
 # timestamp is checked against the event-anchored cutoff, not its
-# position from EOF) -- and jq computes the count itself via `length`,
-# so it is the only command in this assignment: $? right below is
-# genuinely jq's own exit status, not swallowed by a later pipe stage.
-# A non-zero exit (malformed line, unexpected shape) is now logged to
-# active-responses.log and the script exits 1 -- it refuses to report a
-# below-threshold count it can't actually vouch for.
+# position from EOF).
+#
+# Regression found in dual review of the fix above (commit 56a72bb):
+# the first version of this fix used `jq -s` (slurp mode), which
+# requires the file's ENTIRE content to parse as valid JSON before it
+# can build the array to filter/count at all. Since $REQUEST_LOG is
+# explicitly append-only and never rotated, a single malformed line
+# ANYWHERE in the log's history -- not just inside the current window,
+# and regardless of how long ago it was written -- would make every
+# future invocation of this script fail, permanently, for the rest of
+# the round: worse than the original H34 bug, which at least self-healed
+# once the bad line aged out of the old tail-n-5000 window. Fixed by
+# reading the file as raw lines (`-R`, `-n`+`inputs`) and parsing each
+# one independently with `try fromjson catch empty` -- a malformed line
+# simply produces no value and is skipped, exactly like a real line that
+# fails the timestamp/field select() below, instead of aborting the
+# whole scan. jq's own exit status is still meaningful here (JQ_STATUS
+# below): it now only goes non-zero for a genuinely fatal condition
+# (e.g. the file becoming unreadable mid-read), not for content that was
+# merely malformed, since malformed content is now handled inline.
 #
 # ponytail: full linear scan of $REQUEST_LOG on every invocation (this
 # fires on every POST to /admin/login) -- O(log size) per event instead
@@ -158,14 +172,16 @@ CUTOFF_EPOCH=$((EVENT_EPOCH - WINDOW_SECONDS))
 # POSIX explicitly exempts from `-e`, so this is the only shape that
 # lets a failing jq surface as a checked, logged condition instead of
 # silently killing the script before JQ_STATUS is ever read.
-if COUNT=$(jq -s -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
-    map(select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
+if COUNT=$(jq -n -R -r --arg ip "$SRCIP" --argjson cutoff "$CUTOFF_EPOCH" '
+    [ inputs
+      | (try fromjson catch empty)
+      | select(.path == "/admin/login" and .method == "POST" and .remote_addr == $ip
                and .status_code == 200 and .form_params.username != null)
-        | .timestamp
-        | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
-        | fromdateiso8601
-        | select(. >= $cutoff))
-    | length
+      | .timestamp
+      | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+      | fromdateiso8601
+      | select(. >= $cutoff)
+    ] | length
 ' "$REQUEST_LOG" 2>/dev/null); then
     JQ_STATUS=0
 else
