@@ -110,8 +110,12 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         # H20: record the action taken so blue_memory.json accumulates
         # history across runs and recall_past_findings has something to
         # surface -- previously record_finding had zero call sites outside
-        # its own unit test.
-        state.record_finding(action, f"{action} on {target}", "error" not in result)
+        # its own unit test. Success requires both no transport-level
+        # "error" key AND a 2xx status -- a non-2xx response (bad token,
+        # target-side failure) is a normal dict with no "error" key.
+        status = result.get("status_code")
+        succeeded = "error" not in result and status is not None and 200 <= status < 300
+        state.record_finding(action, f"{action} on {target}", succeeded)
         return json.dumps(result)
 
     if name == "recall_past_findings":

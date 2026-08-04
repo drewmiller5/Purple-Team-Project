@@ -69,6 +69,28 @@ def test_dispatch_escalate_response_records_failed_finding_when_http_errors():
     )
 
 
+def test_dispatch_escalate_response_records_failed_finding_on_non_2xx_status():
+    """Reviewer-flagged gap: a non-2xx response (e.g. 403 from a bad
+    internal-action token, or 500 from the target) never raises
+    RequestException, so HttpTool.request returns it with no "error" key
+    -- "error" not in result alone would misrecord this as success."""
+    http = MagicMock()
+    http.request.return_value = {"status_code": 403, "body": '{"error": "bad token"}'}
+    state = MagicMock()
+
+    call = {
+        "function": {
+            "name": "escalate_response",
+            "arguments": {"action": "kill_session", "target": "1"},
+        }
+    }
+    dispatch_tool_call(call, http=http, state=state)
+
+    state.record_finding.assert_called_once_with(
+        "kill_session", "kill_session on 1", False
+    )
+
+
 def test_dispatch_escalate_response_rejected_target_does_not_record_finding():
     """The protected-infrastructure rejection path already logs an
     escalation_rejected event and never reaches http.request -- it should
