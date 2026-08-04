@@ -21,7 +21,7 @@ def carrier_connectivity_check():
     blocked = is_blocked(conn, user_id=session.get("user_id"))
     conn.close()
     if blocked:
-        return jsonify({"error": "session killed"}), 403
+        return jsonify({"error": "account is locked"}), 403
 
     host = request.form.get("host", "")
 

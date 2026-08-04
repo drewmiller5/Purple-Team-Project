@@ -4,7 +4,6 @@ import ipaddress
 import socket
 import sqlite3
 import subprocess
-from functools import lru_cache
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -19,19 +18,28 @@ def _is_authorized_internal_action():
     return bool(expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token))
 
 
-@lru_cache(maxsize=1)
 def _protected_source_ips():
     """Return the target and essential lab peers that must never be blocked.
 
     H61: DNS/file-I/O lookups here are cheap-but-not-free and don't change
     within a process's lifetime, so compute once and cache rather than
-    re-resolving on every /internal/block-ip request.
+    re-resolving on every /internal/block-ip request. A plain lru_cache
+    would freeze a DNS-failure-degraded result (e.g. a startup race where
+    wazuh.manager isn't yet resolvable) for the rest of the process's
+    life -- this is a security-relevant allowlist, so only cache a fully-
+    resolved result; a degraded one retries on the next call, matching
+    the old per-request behavior's ability to self-correct.
     """
+    if _protected_source_ips.cache is not None:
+        return _protected_source_ips.cache
+
     protected = {"127.0.0.1"}
+    resolved_all = True
     for hostname in ("target", socket.gethostname(), "wazuh.manager", "blue_agent"):
         try:
             protected.add(socket.gethostbyname(hostname))
         except socket.gaierror:
+            resolved_all = False
             continue
 
     # Docker exposes the bridge gateway as the default route in the target
@@ -44,8 +52,18 @@ def _protected_source_ips():
                     protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
                     break
     except (OSError, ValueError):
+        # Expected and permanent on non-Linux dev/test environments (no
+        # /proc/net/route at all) -- unlike a DNS gaierror, this will
+        # never self-correct by retrying, so it doesn't gate caching.
         pass
+
+    if resolved_all:
+        _protected_source_ips.cache = protected
     return protected
+
+
+_protected_source_ips.cache = None
+_protected_source_ips.cache_clear = lambda: setattr(_protected_source_ips, "cache", None)
 
 
 def _reject_unauthorized_action():
@@ -103,7 +121,7 @@ def lock_account_permanent():
     conn.execute("INSERT INTO blocked_users (user_id) VALUES (?)", (user_id,))
     conn.commit()
     conn.close()
-    return jsonify({"killed_session_for": user_id}), 200
+    return jsonify({"locked_account_for": user_id}), 200
 
 
 @internal_bp.route("/block-ip", methods=["POST"])

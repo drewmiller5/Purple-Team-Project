@@ -1,4 +1,5 @@
 # target/tests/test_internal_routes.py
+import socket
 from unittest.mock import patch
 
 from target.app import create_app
@@ -237,6 +238,32 @@ def test_protected_source_ips_caches_dns_lookups(tmp_path):
         assert first == second
         # 4 hostnames resolved on the first call only; the second call must
         # not trigger any additional socket.gethostbyname calls.
+        assert mock_lookup.call_count == 4
+    finally:
+        internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_does_not_cache_a_degraded_result_after_dns_failure(tmp_path):
+    # Reviewer-flagged gap: a plain lru_cache permanently locks in a
+    # DNS-failure-degraded result for the rest of the process's life,
+    # unlike the old per-request behavior which would self-correct the
+    # next time a call happened to succeed. A security-relevant allowlist
+    # (this feeds block_ip's infra-denylist) must not freeze itself into
+    # a permanently under-protective state just because the first call
+    # happened during a transient startup DNS race.
+    from target.routes import internal
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", side_effect=socket.gaierror):
+            degraded = internal._protected_source_ips()
+        assert "10.0.0.9" not in degraded
+
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9") as mock_lookup:
+            recovered = internal._protected_source_ips()
+        assert "10.0.0.9" in recovered
+        # A degraded result must not have been cached -- this second call
+        # has to actually retry DNS, not skip straight to a stale result.
         assert mock_lookup.call_count == 4
     finally:
         internal._protected_source_ips.cache_clear()
