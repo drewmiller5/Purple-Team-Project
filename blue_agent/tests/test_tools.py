@@ -260,6 +260,49 @@ def test_dispatch_escalate_response_lock_account_rejects_admin_target():
     state.record_finding.assert_not_called()
 
 
+def test_dispatch_escalate_response_lock_account_rejects_admin_target_with_whitespace():
+    """Security-review-flagged bypass: target's server-side lock_account
+    strips whitespace before storing, so " admin"/"admin " still land on
+    the real admin account even though they aren't byte-identical to the
+    literal string "admin" a naive equality check compares against.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    for padded in (" admin", "admin ", " admin "):
+        call = {
+            "function": {
+                "name": "escalate_response",
+                "arguments": {"action": "lock_account", "target": padded},
+            }
+        }
+        result = dispatch_tool_call(call, http=http, state=state)
+        assert json.loads(result) == {"error": "target is a protected account, refusing to dispatch"}, padded
+    http.request.assert_not_called()
+
+
+def test_dispatch_escalate_response_kill_session_rejects_admin_user_id_alternate_formats():
+    """Security-review-flagged bypass: target's server-side kill_session
+    parses user_id via Python's int(), so "01"/" 1"/"+1"/"1\\n" all
+    resolve to the real admin user_id (1) even though none of them are
+    byte-identical to the literal string "1" a naive equality check
+    compares against.
+    """
+    http = MagicMock()
+    state = MagicMock()
+
+    for alt in ("01", " 1", "+1", "1\n", "1\t"):
+        call = {
+            "function": {
+                "name": "escalate_response",
+                "arguments": {"action": "kill_session", "target": alt},
+            }
+        }
+        result = dispatch_tool_call(call, http=http, state=state)
+        assert json.loads(result) == {"error": "target is a protected account, refusing to dispatch"}, repr(alt)
+    http.request.assert_not_called()
+
+
 def test_dispatch_escalate_response_kill_session_rejects_admin_user_id():
     """H51, kill_session's equivalent of the lock_account admin-protection
     test above. kill_session targets by numeric user_id, not username --

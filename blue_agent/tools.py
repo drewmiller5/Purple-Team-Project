@@ -86,12 +86,25 @@ def _is_protected_block_ip_target(target: str) -> bool:
 # codebase. lock_account targets by username ("admin" directly);
 # kill_session targets by numeric user_id -- admin is seeded first in
 # target/db.py's AUTOINCREMENT users table, so its user_id is
-# deterministically "1" for any fresh deployment.
-_PROTECTED_ACCOUNT_TARGETS = {"lock_account": "admin", "kill_session": "1"}
-
-
+# deterministically 1 for any fresh deployment.
 def _is_protected_account_target(action: str, target: str) -> bool:
-    return _PROTECTED_ACCOUNT_TARGETS.get(action) == target
+    # Security-review-flagged bypass: comparing the raw, un-normalized
+    # target string against a literal ("admin" / "1") missed that
+    # target's own server-side endpoints normalize before matching --
+    # lock_account strips whitespace, kill_session parses via Python's
+    # int(). " admin", "01", " 1", "+1", "1\n" all land on the real
+    # admin account server-side while never being byte-identical to the
+    # literal this check used to compare against. Normalize the same way
+    # the server does before comparing, so the check can't be dodged by
+    # a formatting variant a model could plausibly produce.
+    if action == "lock_account":
+        return target.strip() == "admin"
+    if action == "kill_session":
+        try:
+            return int(target) == 1
+        except ValueError:
+            return False
+    return False
 
 
 def dispatch_tool_call(call: dict, http, state) -> str:
