@@ -7,21 +7,31 @@ class WazuhAlertsReader:
         self.alerts_path = alerts_path
         self.state = state
         self._offset = 0
+        self._inode = None
 
     def poll_new_alerts(self) -> list:
         path = Path(self.alerts_path)
         if not path.exists():
             return []
 
-        file_size = path.stat().st_size
+        stat = path.stat()
+        file_size = stat.st_size
 
-        # H19: position is a byte offset, not a line count. If the file was
-        # rotated/truncated shorter than our last position, the old offset
-        # now points past EOF -- reset to the start and log the recovery
-        # instead of silently returning [] forever.
-        if self._offset > file_size:
+        # H19: position is a byte offset, not a line count. A same-size-or-
+        # larger replacement file (log rotated then quickly refilled) isn't
+        # caught by a size-only check, so also compare inode identity --
+        # a rotated file is a genuinely different file even if its current
+        # size happens to be >= our last offset. Either signal means the
+        # old offset no longer points at content we've actually read, so
+        # reset to the start and log the recovery instead of silently
+        # returning [] or seeking into unrelated bytes.
+        if self._inode is not None and stat.st_ino != self._inode:
             self._log_rotation(file_size)
             self._offset = 0
+        elif self._offset > file_size:
+            self._log_rotation(file_size)
+            self._offset = 0
+        self._inode = stat.st_ino
 
         # H24: seek to the stored offset and read only the new bytes,
         # instead of re-reading and re-parsing the whole file every poll.

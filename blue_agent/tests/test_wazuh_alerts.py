@@ -118,6 +118,34 @@ def test_poll_new_alerts_recovers_from_truncation_or_rotation(tmp_path):
     assert third_batch[0]["rule"]["id"] == "101"
 
 
+def test_poll_new_alerts_recovers_from_rotation_when_replacement_is_not_shorter(tmp_path):
+    """Reviewer-flagged gap in the original H19 fix: a size-only check
+    (`self._offset > file_size`) misses the case where a rotated log is
+    replaced by a NEW file that happens to be the same size or larger than
+    the old read position. That's still a rotation (a different file, a
+    different inode) -- without an identity check, the reader would seek
+    into an arbitrary byte position of unrelated content and silently
+    skip or mis-parse alerts, the exact "looks healthy, isn't" failure
+    class H19 exists to close.
+    """
+    path = tmp_path / "alerts.json"
+    path.write_text('{"rule": {"id": "1"}}\n', encoding="utf-8")
+
+    reader = WazuhAlertsReader(str(path))
+    first_batch = reader.poll_new_alerts()
+    assert len(first_batch) == 1
+
+    # Simulate rotation via unlink+recreate (a new inode), replaced with
+    # content that is the SAME size as the offset already read -- the old
+    # size-only check (`offset > file_size`) would not fire here.
+    path.unlink()
+    path.write_text('{"rule": {"id": "2"}}\n', encoding="utf-8")
+
+    second_batch = reader.poll_new_alerts()
+    assert len(second_batch) == 1
+    assert second_batch[0]["rule"]["id"] == "2"
+
+
 def test_poll_new_alerts_logs_rotation_recovery_via_state(tmp_path):
     """H19/H24: when a state/logger is supplied, rotation recovery must be
     logged using the established state.log_event pattern (see
