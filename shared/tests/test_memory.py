@@ -89,3 +89,38 @@ def test_load_memory_raises_clear_error_on_corrupt_json(tmp_path):
     # json.JSONDecodeError traceback.
     with pytest.raises(ValueError, match=path_pattern):
         append_memory_entry(str(path), {"side": "red", "note": "n/a"})
+
+
+def test_load_memory_handles_invalid_utf8_bytes_without_crashing(tmp_path):
+    # H30: a single invalid UTF-8 byte must not raise an uncaught
+    # UnicodeDecodeError -- it should surface as the module's own typed
+    # ValueError (same as any other corrupt-content case), not a crash.
+    path = tmp_path / "bad_bytes.json"
+    path.write_bytes(b"\xff\xfe not valid json even after decoding")
+    path_pattern = re.escape(str(path))
+
+    with pytest.raises(ValueError, match=path_pattern):
+        load_memory(str(path))
+
+
+def test_load_memory_raises_clear_error_on_wrong_shape(tmp_path):
+    # H31: valid JSON but wrong shape (e.g. missing 'entries') must raise
+    # the module's typed ValueError, not an unhandled KeyError/AttributeError.
+    path = tmp_path / "wrong_shape.json"
+    path.write_text(json.dumps({"foo": "bar"}), encoding="utf-8")
+    path_pattern = re.escape(str(path))
+
+    with pytest.raises(ValueError, match=path_pattern):
+        load_memory(str(path))
+
+    with pytest.raises(ValueError, match=path_pattern):
+        append_memory_entry(str(path), {"side": "red", "note": "n/a"})
+
+
+def test_load_memory_raises_clear_error_on_empty_object(tmp_path):
+    path = tmp_path / "empty_object.json"
+    path.write_text("{}", encoding="utf-8")
+    path_pattern = re.escape(str(path))
+
+    with pytest.raises(ValueError, match=path_pattern):
+        load_memory(str(path))

@@ -26,13 +26,23 @@ def read_events(log_path: str) -> list:
     if not p.exists():
         return []
     events = []
-    with open(p, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+    # Read as raw bytes and decode per-line with errors="replace" so a
+    # single invalid UTF-8 byte anywhere in the file only mangles that one
+    # line instead of raising an uncaught UnicodeDecodeError that would
+    # abort the read of the entire file (H30).
+    with open(p, "rb") as f:
+        for raw_line in f:
+            line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                parsed = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # A syntactically-valid-but-non-dict line (bare number, string,
+            # array) must be skipped too -- downstream consumers all call
+            # .get(...) on each event (H29).
+            if not isinstance(parsed, dict):
+                continue
+            events.append(parsed)
     return events
