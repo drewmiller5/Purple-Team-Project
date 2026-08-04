@@ -1,26 +1,23 @@
 # Wazuh indexer SSL certs
 
-The `.key`/`-key.pem` files in this directory (including the root CA key,
-`root-ca.key`) are **not secrets protecting any real system**. They are
-upstream [`wazuh-docker`](https://github.com/wazuh/wazuh-docker)'s own
-documented single-node demo certificates -- the same defaults shipped in
-Wazuh's official quickstart compose files.
+The `*.key`/`*-key.pem` files in this directory (root CA and per-service
+private keys) are gitignored and **not committed**. They're regenerated
+locally by running `wazuh/generate-indexer-certs.yml` (which invokes the
+`wazuh/wazuh-certs-generator` image against `wazuh/config/certs.yml`) --
+each clone/deploy gets its own, rather than reusing key material from
+another environment.
 
-They are regenerated locally at deploy time by running
-`wazuh/generate-indexer-certs.yml` (which invokes the
-`wazuh/wazuh-certs-generator` image against `wazuh/config/certs.yml`), not
-hand-authored or reused across environments. Nothing outside this lab
-trusts this CA, and this repo has no configured git remote, so there is no
-live exposure from these files being present in version control.
+The corresponding `*.pem` certificate files (not `-key.pem`) are public
+certs, not secrets, and stay committed so a fresh clone has a working,
+internally-consistent bundle without needing to regenerate before first
+boot.
 
-They're committed (rather than gitignored) because Task 2 of the
-[Wazuh detection-layer plan](../../../docs/ledger/plans/2026-07-26-wazuh-detection-layer.md)
-found individual-file cert mounts (as opposed to mounting the whole
-directory) to be the reliable approach for this project's `docker-compose.yml`
--- see that plan's Task 2 notes. Regenerating and recommitting is the
-expected workflow if these ever need to change, not a one-time secret to
-rotate.
-
-If a secret scanner flags `root-ca.key` or the other `*-key.pem` files
-here: that's expected and correct behavior for a scanner, and this note is
-the answer -- these are known-public upstream demo material, not a leak.
+This wasn't always the policy: this directory's private keys were
+originally committed on the theory that they were disposable upstream
+demo material with no live exposure (this repo had no git remote at the
+time). That stopped being true once the repo went public on GitHub --
+see finding **H47** in
+[the findings ledger](../../../docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md)
+for the full history. The old keys are still recoverable from git
+history (accepted risk, rotate-forward only, no history rewrite), but
+going forward: **do not commit any private key file in this directory.**
