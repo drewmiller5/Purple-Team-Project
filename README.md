@@ -38,6 +38,14 @@ for a local, single-operator lab -- it grants real attack-firing and
 container-restart capability -- but the port should never be bound to a
 routable or non-localhost interface.
 
+### Target app (host port 5000) -- the attack surface itself
+
+`target` is also reachable directly at `http://localhost:5000` (bound to
+`127.0.0.1` only), so a human operator can browse to it and manually try
+the four seeded vulnerabilities below, not just watch `red_agent` do it
+automatically. No auth in front of it -- that's intentional, it's the thing
+being attacked.
+
 ## Security notes
 
 - The Wazuh indexer/API/dashboard credentials are no longer the upstream
@@ -66,7 +74,7 @@ routable or non-localhost interface.
 - No TLS termination on `target`, `purple_dashboard`, or `round_helper`
   (H52) is still open -- low risk for a genuinely local-only deployment,
   documented as a known gap rather than fixed here.
-- `target/app.py`'s three seeded vulnerabilities (below) are intentional --
+- `target/app.py`'s four seeded vulnerabilities (below) are intentional --
   that's the point of the lab. Findings that were *not* intentional (a
   hardcoded Flask session key, unsanitized alert data reaching the blue
   agent's LLM context) are fixed; see the findings ledger for the full,
@@ -74,10 +82,11 @@ routable or non-localhost interface.
 
 ## What's built (Phase 1: Target Range + Core Infrastructure)
 
-- `target/` — Flask app with three intentionally-seeded vulnerabilities:
+- `target/` — Flask app with four intentionally-seeded vulnerabilities:
   SQLi in `/search`, weak/default admin creds + no lockout on
-  `/admin/login`, and IDOR on `/documents/<id>`. Every seeded vuln has a
-  regression test proving it's exploitable.
+  `/admin/login`, IDOR on `/documents/<id>`, and OS command injection on
+  `/admin/diagnostics` (the designed win-path escalation). Every seeded
+  vuln has a regression test proving it's exploitable.
 - `wazuh-rules/target_rules.xml` — the Wazuh detection rules for the
   vulnerabilities above; see `docs/detection-rules.md` for a readable
   writeup of what each rule does and why two of them are intentionally

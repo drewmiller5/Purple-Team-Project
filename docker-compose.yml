@@ -8,7 +8,11 @@ services:
     cap_add:
       - NET_ADMIN
     ports:
-      - "5000:5000"
+      # H71: bound to 127.0.0.1 only, not all interfaces -- target ships
+      # real seeded vulnerabilities (SQLi, bruteforce, IDOR, OS command
+      # injection with NET_ADMIN), same loopback-only posture Task 8
+      # established for Wazuh's exposed ports (H48/H53).
+      - "127.0.0.1:5000:5000"
     networks:
       - lab-net
       # Task 8 (H7 network-segmentation half): target is the only service
@@ -17,6 +21,10 @@ services:
       # control-plane network, for agent enrollment) -- this is what lets
       # red_agent stay off wazuh-net entirely while target still enrolls.
       - wazuh-net
+      # H71: target-host-net, see its own networks: comment below --
+      # lab-net/wazuh-net are both internal:true, which silently prevented
+      # the ports: mapping above from ever actually binding.
+      - target-host-net
     depends_on:
       - wazuh.manager
     healthcheck:
@@ -507,6 +515,28 @@ networks:
     # this Docker Desktop/WSL2 engine and unverified as fixed on native
     # Linux Docker) and the residual risk it leaves (full dashboard app
     # reachable by raw IP, gated only by WAZUH_DASHBOARD_PASSWORD).
+  target-host-net:
+    driver: bridge
+    # H71: single-purpose network, ONLY target is ever attached to it --
+    # do not add any other service, mirroring dashboard-host-net's own
+    # pattern below. A network with internal:true can never have a
+    # host-published port bound (target's own "127.0.0.1:5000:5000" had
+    # silently never worked since the project's first commit, since
+    # target's only networks were lab-net/wazuh-net, both internal:true --
+    # confirmed live via `docker inspect` showing an empty
+    # NetworkSettings.Ports despite HostConfig.PortBindings accepting the
+    # mapping). target needs at least one non-internal network for the
+    # port publish to actually bind.
+    #
+    # Same residual caveat as dashboard-host-net (Task 8 fix round 2): raw-
+    # IP reachability to a published port is not fully gated by network
+    # membership on this Docker Desktop/WSL2 engine (Docker's per-
+    # published-port ACCEPT rule doesn't check source network). This is
+    # inconsequential here, unlike for wazuh.dashboard: target already
+    # shares lab-net with red_agent/blue_agent by design -- that's the
+    # actual attack surface, not a boundary being protected -- so this
+    # network adds no new exposure for the agents. It only exists to make
+    # the host-level port publish work for a human operator.
   agent-net:
     driver: bridge
     # Deliberately NOT internal — this is how red/blue agent containers
