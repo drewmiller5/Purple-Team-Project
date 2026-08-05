@@ -60,6 +60,24 @@ def test_load_config_rejects_negative_poll_interval_seconds(monkeypatch):
         load_config()
 
 
+def test_load_config_rejects_nan_poll_interval_seconds(monkeypatch):
+    """float('nan') < 0 is False -- NaN silently bypasses a plain '< 0'
+    check, then crashes time.sleep(nan) deep in the round loop instead."""
+    monkeypatch.setenv("REFEREE_POLL_INTERVAL_SECONDS", "nan")
+
+    with pytest.raises(ValueError, match="REFEREE_POLL_INTERVAL_SECONDS"):
+        load_config()
+
+
+def test_load_config_rejects_infinite_poll_interval_seconds(monkeypatch):
+    """float('inf') < 0 is also False, and time.sleep(inf) doesn't raise --
+    it blocks forever, a silent permanent hang in the poll loop."""
+    monkeypatch.setenv("REFEREE_POLL_INTERVAL_SECONDS", "inf")
+
+    with pytest.raises(ValueError, match="REFEREE_POLL_INTERVAL_SECONDS"):
+        load_config()
+
+
 def test_load_config_rejects_non_numeric_max_round_seconds_with_clear_message(monkeypatch):
     monkeypatch.setenv("REFEREE_MAX_ROUND_SECONDS", "not-a-number")
 

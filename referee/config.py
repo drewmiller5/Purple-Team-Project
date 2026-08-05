@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass
 
@@ -44,11 +45,16 @@ def load_config() -> RefereeConfig:
         )
 
     poll_interval_seconds = _env_float("REFEREE_POLL_INTERVAL_SECONDS", "3.0")
-    if poll_interval_seconds < 0:
+    if not math.isfinite(poll_interval_seconds) or poll_interval_seconds < 0:
         # time.sleep() raises ValueError on a negative argument -- reject it
-        # here, at startup, instead of deep in the round loop.
+        # here, at startup, instead of deep in the round loop. A plain
+        # "< 0" check alone isn't enough: float('nan') < 0 is False (NaN
+        # comparisons are always False), so NaN would silently pass and
+        # still crash time.sleep() later; float('inf') < 0 is also False,
+        # and time.sleep(inf) doesn't raise at all -- it blocks forever, a
+        # silent permanent hang in the poll loop. isfinite() catches both.
         raise ValueError(
-            f"REFEREE_POLL_INTERVAL_SECONDS must be non-negative, got {poll_interval_seconds}"
+            f"REFEREE_POLL_INTERVAL_SECONDS must be a finite, non-negative number, got {poll_interval_seconds}"
         )
 
     return RefereeConfig(
