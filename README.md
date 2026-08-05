@@ -53,6 +53,11 @@ routable or non-localhost interface.
   `wazuh.indexer`/`wazuh.dashboard` share) -- only `target` is, multi-homed
   for agent enrollment. This closes findings H7, H48, H52 (partial -- see
   below), and H53 in `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`.
+  Caveat: `127.0.0.1`-only binding can behave inconsistently under Docker
+  Desktop/WSL2's networking modes (e.g. "mirrored" WSL2 networking has had
+  reports of loopback-bound ports being reachable from elsewhere on the
+  LAN) -- if there's any doubt the binding is actually restrictive on your
+  setup, verify from another device on the LAN rather than assuming.
 - No TLS termination on `target`, `purple_dashboard`, or `round_helper`
   (H52) is still open -- low risk for a genuinely local-only deployment,
   documented as a known gap rather than fixed here.

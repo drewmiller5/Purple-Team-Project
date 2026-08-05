@@ -210,6 +210,13 @@ services:
     ports:
       # Task 8 (H48): bind to loopback only -- was published to all host
       # interfaces, reachable by anything that can reach the host at all.
+      # Fix-round note (item #5): this binding is a functional no-op here
+      # specifically -- wazuh.indexer's only network (wazuh-net) is
+      # internal:true, so on this Docker Engine/Docker Desktop the port
+      # never binds to the host at all regardless of the 127.0.0.1 prefix.
+      # Correct and meaningful on native Linux Docker (H53's original
+      # threat model); silently non-functional on Docker Desktop. See
+      # wazuh.dashboard's networks: comment for how this was confirmed.
       - "127.0.0.1:9200:9200"
     environment:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
@@ -250,6 +257,11 @@ services:
       # Task 8 (H48): bind to loopback only -- these were published to all
       # host interfaces (agent enrollment, agent data, syslog, and the API
       # were all reachable by anything that could reach the host at all).
+      # Fix-round note (item #5): same Docker Desktop caveat as
+      # wazuh.indexer's ports: comment above -- wazuh.manager is also
+      # wazuh-net-only (internal:true), so these never bind to the host
+      # here regardless of the 127.0.0.1 prefix; meaningful on native
+      # Linux Docker.
       - "127.0.0.1:1514:1514"
       - "127.0.0.1:1515:1515"
       - "127.0.0.1:514:514/udp"
@@ -317,31 +329,58 @@ services:
     container_name: purple-lab-wazuh-dashboard
     hostname: wazuh.dashboard
     restart: always
+    # Task 8 fix round (finding #1) -- agent-net (and lab-net) DROPPED.
+    # H53's real complaint wasn't about ports: publishing (that premise was
+    # correctly disproven live during Task 8 and doesn't change here) --
+    # it's that red_agent/blue_agent sit on both lab-net and agent-net, and
+    # wazuh.dashboard being on either one gives them a direct container-to-
+    # container path to a web app carrying H7/H48's credentials, regardless
+    # of the host-port loopback binding below (that only restricts *host*
+    # access, not bridge-network peer access). dashboard-host-net is a new,
+    # single-purpose, non-internal network that ONLY wazuh.dashboard joins
+    # -- it exists solely so `ports:` publishing keeps working (a network
+    # with internal:true can never have a host-published port bound; see
+    # wazuh-net below). No other service is ever added to it. Combined
+    # with wazuh-net (for reaching wazuh.manager/wazuh.indexer),
+    # red_agent/blue_agent now have zero shared network segment with
+    # wazuh.dashboard.
+    #
+    # Live-verified (not just configured), via curl/connect reachability
+    # testing, not `docker inspect` output (a reviewer flagged inspect's
+    # port-mapping display as an unreliable signal -- the indexer showed a
+    # mapping in inspect while still being unreachable via curl):
+    # `curl -k https://127.0.0.1:443/` from the host returns a real
+    # response (302); a container on lab-net/agent-net gets a DNS
+    # resolution failure resolving the hostname `wazuh.dashboard` (the
+    # shared embedded-DNS/hostname path is fully closed); the same
+    # container times out connecting by raw IP to wazuh.manager's/
+    # wazuh.indexer's wazuh-net (internal:true) addresses, confirming
+    # internal:true genuinely blocks cross-network reachability here.
+    #
+    # RESIDUAL GAP FOUND DURING THIS VERIFICATION, documented rather than
+    # silently claimed fully fixed: on THIS Docker Engine (29.6.2, Docker
+    # Desktop/Windows/WSL2), the standard DOCKER-ISOLATION-STAGE-1/2
+    # iptables chains that isolate separate bridge networks from each
+    # other on native Linux Docker do not exist at all here (`iptables -L
+    # DOCKER-ISOLATION-STAGE-1` inside the Docker VM: "No chain/target/
+    # match by that name"). dashboard-host-net, like agent-net, cannot be
+    # internal:true (host-port publish requires a non-internal network) --
+    # and on this engine, two non-internal bridges can still route to each
+    # other by raw IP: a container on agent-net/lab-net successfully
+    # opened a TCP connection directly to wazuh.dashboard's
+    # dashboard-host-net IP, bypassing DNS entirely. Net effect: hostname/
+    # DNS-based access from red_agent/blue_agent is fully blocked, and
+    # compose-level network membership correctly expresses least-
+    # privilege intent, but a determined actor that already knows or
+    # scans for the dashboard's dashboard-host-net IP can still open a raw
+    # connection to it -- the dashboard's own login (rotated
+    # WAZUH_DASHBOARD_PASSWORD) is the remaining gate at that point. This
+    # is expected to fully isolate as designed on native Linux Docker,
+    # where DOCKER-ISOLATION chains are normally present -- same
+    # Docker-Desktop-networking-mode caveat as README.md's Security notes.
     networks:
-      # Task 8 (H53) -- LIVE VERIFICATION CONTRADICTED THE FINDING'S
-      # PREMISE, agent-net kept. H53 claimed ports: publishing is
-      # independent of network membership, "proven" by wazuh.manager/
-      # wazuh.indexer being host-reachable while lab-net-only. A real
-      # `docker compose down -v && up -d --build` on this host disproved
-      # that: on this Docker Engine (29.6.2, Docker Desktop/Windows), a
-      # container whose ONLY networks are internal:true never gets its
-      # published ports bound to the host at all (confirmed via `docker
-      # inspect` -- empty NetworkSettings.Ports, no gateway -- and via a
-      # live test: attaching/detaching a non-internal network flipped
-      # port 9200 reachability on wazuh.indexer immediately). Removing
-      # agent-net here reproduced the same failure for port 443, which
-      # *did* work pre-Task-8 specifically because agent-net (non-
-      # internal) was attached. Reverted per this task's own instruction
-      # to stop and report rather than proceed once verification
-      # disproves the premise -- see Task 8 completion notes / commit
-      # message for the full writeup. wazuh.manager/wazuh.indexer don't
-      # regress further (they were already lab-net-only, i.e. already
-      # unreachable via host port, before this task; moving them to
-      # wazuh-net-only preserves that pre-existing status quo rather than
-      # changing it).
-      - lab-net
       - wazuh-net
-      - agent-net
+      - dashboard-host-net
     depends_on:
       - wazuh.indexer
       - wazuh.manager
@@ -349,6 +388,16 @@ services:
       # Task 8 (H48): bind to loopback only -- was published to all host
       # interfaces.
       - "127.0.0.1:443:5601"
+    # Task 8 fix round (finding #2): the image's own /wazuh_app_config.sh
+    # only auto-populates wazuh.yml's manager-API host block from
+    # API_USERNAME/API_PASSWORD when that block isn't already present --
+    # our committed wazuh.yml always has it (with a placeholder password),
+    # so that auto-populate path never fires. This thin wrapper (same
+    # pattern as target/entrypoint.sh) copies the committed template into
+    # the runtime config volume and substitutes the real, rotated
+    # WAZUH_API_PASSWORD in at container start, then execs the image's
+    # real entrypoint unchanged. See wazuh/config/wazuh_dashboard/entrypoint.sh.
+    entrypoint: ["/bin/bash", "/wazuh_dashboard_entrypoint.sh"]
     environment:
       - INDEXER_USERNAME=admin
       # Task 8 (H7/H48): rotated off the upstream demo password. Required,
@@ -360,13 +409,24 @@ services:
       # externally supplied -- fails closed if absent. See .env.example.
       - DASHBOARD_PASSWORD=${WAZUH_DASHBOARD_PASSWORD:?set WAZUH_DASHBOARD_PASSWORD before starting the lab}
       - API_USERNAME=wazuh-wui
+      # Task 8 fix round (finding #2): also templated into wazuh.yml by
+      # wazuh_dashboard_entrypoint.sh below -- that's the wazuh-app
+      # plugin's manager-API auth path, distinct from this env var (which
+      # only feeds wazuh_app_config.sh's skip-if-already-configured check).
       - API_PASSWORD=${WAZUH_API_PASSWORD:?set WAZUH_API_PASSWORD before starting the lab}
     volumes:
       - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
       - ./wazuh/config/wazuh_indexer_ssl_certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
       - ./wazuh/config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem
       - ./wazuh/config/wazuh_dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
-      - ./wazuh/config/wazuh_dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+      # Task 8 fix round (finding #2): mounted read-only to a staging path,
+      # NOT to the live config path -- wazuh_dashboard_entrypoint.sh copies
+      # it into the wazuh-dashboard-config volume below with the real
+      # password substituted in, so `sed` never writes into this
+      # bind-mounted, git-tracked file (which would otherwise leak the
+      # rotated secret into the working tree on every container start).
+      - ./wazuh/config/wazuh_dashboard/wazuh.yml:/wazuh_dashboard_config_template/wazuh.yml:ro
+      - ./wazuh/config/wazuh_dashboard/entrypoint.sh:/wazuh_dashboard_entrypoint.sh:ro
       - wazuh-dashboard-config:/usr/share/wazuh-dashboard/data/wazuh/config
       - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
 
@@ -387,6 +447,33 @@ networks:
     # neither needs to be. This is what makes host-reachable ports: on
     # wazuh.manager/wazuh.indexer independent of lab-net/agent-net
     # membership, same proof pattern H53 relied on for wazuh.dashboard.
+    #
+    # RESIDUAL RISK (fix round, security review item #3, not a new
+    # regression): target is multi-homed onto wazuh-net for agent
+    # enrollment, and target has a seeded RCE by design plus NET_ADMIN/
+    # NET_RAW (target is considered compromised-by-design, same invariant
+    # agent-net's comment below documents). Once target is compromised --
+    # red_agent's designed win condition -- that gives a direct route into
+    # this otherwise-isolated network, including reading the enrollment
+    # PSK file (wazuh/config/wazuh_cluster/authd.pass) directly off disk.
+    # This is accepted, not re-architected here: wazuh-net isolates
+    # red_agent/blue_agent directly, not a compromised target, and target
+    # already needed manager connectivity before this task.
+  dashboard-host-net:
+    driver: bridge
+    # Task 8 fix round (finding #1): single-purpose network, ONLY
+    # wazuh.dashboard is ever attached to it -- do not add any other
+    # service. Exists solely so wazuh.dashboard's port 443 host-publish
+    # keeps working: a network with internal:true can never have a
+    # host-published port bound (verified live, see wazuh.dashboard's own
+    # networks: comment), so wazuh.dashboard needs at least one
+    # non-internal network. No other service joins it, and hostname/DNS
+    # access from red_agent/blue_agent is confirmed blocked -- but see the
+    # RESIDUAL GAP note on wazuh.dashboard's networks: comment: on this
+    # Docker Desktop/Windows engine, non-internal bridges (this one and
+    # agent-net) are not mutually iptables-isolated the way internal:true
+    # networks are, so raw-IP reachability isn't fully closed here the way
+    # it would be on native Linux Docker.
   agent-net:
     driver: bridge
     # Deliberately NOT internal — this is how red/blue agent containers

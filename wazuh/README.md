@@ -40,6 +40,11 @@ though the containers will still start.
 regenerate `wazuh/config/wazuh_indexer/internal_users.yml`'s matching
 bcrypt hashes when rotating them (Task 8 / H7 / H48).
 
+`config/wazuh_dashboard/wazuh.yml`'s manager-API password is templated in
+automatically from `WAZUH_API_PASSWORD` at container start (see
+`config/wazuh_dashboard/entrypoint.sh`) -- the committed file only ever
+holds an inert placeholder, never edit it directly.
+
 3) Start the environment with docker-compose:
 
 - In the foregroud:

@@ -3,5 +3,11 @@ hosts:
       url: "https://wazuh.manager"
       port: 55000
       username: wazuh-wui
-      password: "MyS3cr37P450r.*-"
+      # Task 8 fix round (finding #2): NOT a real credential -- substituted
+      # at container start from WAZUH_API_PASSWORD by
+      # wazuh_dashboard_entrypoint.sh (see docker-compose.yml's
+      # wazuh.dashboard entrypoint:). This file is git-tracked; the real
+      # rotated password only ever lives in .env / the runtime config
+      # volume, never here.
+      password: "WAZUH_API_PASSWORD_PLACEHOLDER"
       run_as: false
