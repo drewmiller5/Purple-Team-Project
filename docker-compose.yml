@@ -449,9 +449,10 @@ services:
       # Task 8 fix round (finding #2): mounted read-only to a staging path,
       # NOT to the live config path -- wazuh_dashboard_entrypoint.sh copies
       # it into the wazuh-dashboard-config volume below with the real
-      # password substituted in, so `sed` never writes into this
-      # bind-mounted, git-tracked file (which would otherwise leak the
-      # rotated secret into the working tree on every container start).
+      # password substituted in (bash %%/# splitting + concatenation, not
+      # sed -- see entrypoint.sh), so the substitution never writes into
+      # this bind-mounted, git-tracked file (which would otherwise leak
+      # the rotated secret into the working tree on every container start).
       - ./wazuh/config/wazuh_dashboard/wazuh.yml:/wazuh_dashboard_config_template/wazuh.yml:ro
       - ./wazuh/config/wazuh_dashboard/entrypoint.sh:/wazuh_dashboard_entrypoint.sh:ro
       - wazuh-dashboard-config:/usr/share/wazuh-dashboard/data/wazuh/config

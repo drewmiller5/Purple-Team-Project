@@ -8,9 +8,14 @@
 # literal ampersand -- so any API_PASSWORD containing `&` (explicitly in
 # .env.example's allowed complexity charset: @$!%*?&-_.) got silently
 # corrupted. A password containing the `|` delimiter broke the sed command
-# itself. The fix replaced sed with bash `${var//search/replace}`
-# parameter expansion, which is a literal substring replace with no
-# metacharacters on the replacement side.
+# itself. A first fix attempt swapped sed for bash `${var/pat/replacement}`
+# parameter expansion -- but bash >=5.2's patsub_replacement shell option
+# (on by default) treats `&` in THAT replacement side identically to sed,
+# so it reproduced the exact same bug. The shipped fix instead splits the
+# template on the placeholder using `%%`/`#` (pattern-matching only ever
+# applied to the search side, never the password) and reassembles with
+# plain string concatenation, which has no special characters on either
+# side in bash. See entrypoint.sh's own header for the full account.
 #
 # No container/Docker is required to prove this -- the bug and fix live
 # entirely in string-substitution semantics. This makes a runnable copy of
