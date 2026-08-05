@@ -40,15 +40,22 @@ routable or non-localhost interface.
 
 ## Security notes
 
-- The Wazuh indexer/API/dashboard credentials in `docker-compose.yml`
-  (`SecretPassword`, `kibanaserver`/`kibanaserver`, etc.) are upstream
-  [`wazuh-docker`](https://github.com/wazuh/wazuh-docker)'s own documented
-  single-node demo defaults, not a leak of a real secret -- same rationale as
-  `wazuh/config/wazuh_indexer_ssl_certs/README.md` for the TLS certs in that
-  directory. Left as-is (not rotated) for this publish; rotating them and
-  segmenting `red_agent` off the SIEM's own management network is tracked as
-  finding H7 in `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`,
-  worked in public post-publish along with the rest of that ledger.
+- The Wazuh indexer/API/dashboard credentials are no longer the upstream
+  [`wazuh-docker`](https://github.com/wazuh/wazuh-docker) demo defaults
+  (`SecretPassword`, `kibanaserver`/`kibanaserver`) -- they're rotated,
+  externally-supplied values read from `.env` (`WAZUH_INDEXER_PASSWORD`,
+  `WAZUH_API_PASSWORD`, `WAZUH_DASHBOARD_PASSWORD`; see `.env.example` and
+  `wazuh/README.md`), and the indexer/manager/dashboard host ports (9200,
+  1514, 1515, 514, 55000, 443) are bound to `127.0.0.1` only, not all
+  interfaces. Agent enrollment additionally requires a pre-shared key
+  (`wazuh/config/wazuh_cluster/authd.pass`, generated locally, gitignored).
+  `red_agent` is not attached to `wazuh-net` (the network `wazuh.manager`/
+  `wazuh.indexer`/`wazuh.dashboard` share) -- only `target` is, multi-homed
+  for agent enrollment. This closes findings H7, H48, H52 (partial -- see
+  below), and H53 in `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`.
+- No TLS termination on `target`, `purple_dashboard`, or `round_helper`
+  (H52) is still open -- low risk for a genuinely local-only deployment,
+  documented as a known gap rather than fixed here.
 - `target/app.py`'s three seeded vulnerabilities (below) are intentional --
   that's the point of the lab. Findings that were *not* intentional (a
   hardcoded Flask session key, unsanitized alert data reaching the blue

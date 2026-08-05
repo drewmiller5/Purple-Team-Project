@@ -23,6 +23,23 @@ are plain certs, not secrets, and stay committed so a fresh clone has a
 working, internally-consistent cert bundle without needing to regenerate
 before first boot.
 
+2b) Generate the agent-enrollment pre-shared key (Task 8 / H7 / H48):
+```
+$ openssl rand -hex 32 > wazuh/config/wazuh_cluster/authd.pass
+```
+This file is gitignored (same treatment as the SSL private keys above) and
+bind-mounted into both `wazuh.manager` (as `etc/authd.pass`, read by
+`wazuh-authd` because `wazuh_manager.conf` sets
+`<use_password>yes</use_password>`) and `target` (read by `entrypoint.sh` to
+supply `agent-auth -P`). A fresh clone must generate this file before first
+boot, or `target`'s agent enrollment will fail closed (empty password) even
+though the containers will still start.
+
+2c) Set the Wazuh indexer/API/dashboard credentials in `.env` -- see
+`.env.example` for the three `WAZUH_*_PASSWORD` variables and how to
+regenerate `wazuh/config/wazuh_indexer/internal_users.yml`'s matching
+bcrypt hashes when rotating them (Task 8 / H7 / H48).
+
 3) Start the environment with docker-compose:
 
 - In the foregroud:

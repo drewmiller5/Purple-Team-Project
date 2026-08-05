@@ -11,3 +11,7 @@ Pipfile.lock
 # keys under a *-key.pem naming convention (not *.key) -- these are real
 # private key material too, just missed by the pattern above.
 *-key.pem
+# Task 8 (H7/H48): agent-enrollment pre-shared key, generated locally and
+# bind-mounted into wazuh.manager + target -- same "generate locally, never
+# commit" treatment as the SSL private keys above.
+wazuh/config/wazuh_cluster/authd.pass

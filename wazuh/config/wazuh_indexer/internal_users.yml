@@ -11,16 +11,23 @@ _meta:
 ## Demo users
 
 admin:
-  hash: "$2y$12$K/SpwjtB.wOHJ/Nc6GVRDuc1h0rM1DfvziFRNPtk27P.c4yDr9njO"
+  # Task 8 (H7/H48): rotated off the upstream demo password. Hash generated
+  # locally via the indexer image's own plugins/opensearch-security/tools/
+  # hash.sh for whatever password is set in WAZUH_INDEXER_PASSWORD (.env) --
+  # keep these two in sync when rotating (see .env.example / wazuh/README.md).
+  hash: "$2y$12$V0VNqbU4MQVcz4migwmlyeS5y/gNYuLpxz.PouGMDx6unAfYQyZIG"
   reserved: true
   backend_roles:
   - "admin"
-  description: "Demo admin user"
+  description: "admin user -- password rotated via WAZUH_INDEXER_PASSWORD, see .env.example"
 
 kibanaserver:
-  hash: "$2a$12$4AcgAt3xwOWadA5s5blL6ev39OXDNhmOesEoo33eZtrq2N0YrU3H."
+  # Task 8 (H7/H48): rotated off the upstream demo password. Hash generated
+  # the same way, for WAZUH_DASHBOARD_PASSWORD (.env). Keep in sync when
+  # rotating.
+  hash: "$2y$12$UMJcC5J96H8M9lUptX3JkeB/X5iT20HJVrhJ8awtJP6BWiho8OMz2"
   reserved: true
-  description: "Demo kibanaserver user"
+  description: "kibanaserver user -- password rotated via WAZUH_DASHBOARD_PASSWORD, see .env.example"
 
 kibanaro:
   hash: "$2a$12$JJSXNfTowz7Uu5ttXfeYpeYE0arACvcwlPBStB1F.MI7f0U9Z4DGC"
