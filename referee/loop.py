@@ -44,7 +44,17 @@ def run(config) -> None:
     # nor red has already found, so rounds stop re-covering the same ground.
     # Recorded in white's own memory file only -- never the shared event
     # log, same boundary referee's own assessments already respect.
-    prepare_round(config.white_memory_path, config.red_memory_path)
+    #
+    # H56: this runs after go.flag/stop.flag are cleared above but before a
+    # new go.flag is ever written -- an uncaught ValueError here (corrupt
+    # white_memory.json/red_memory.json, Task 11's typed error) would kill
+    # the referee process into a permanent silent hang (nothing else writes
+    # go.flag). Degrade instead: log the corruption and proceed without a
+    # flag assignment this round.
+    try:
+        prepare_round(config.white_memory_path, config.red_memory_path)
+    except ValueError as exc:
+        log_event(config.referee_log_path, {"side": "white", "phase": "memory_corrupt", "error": str(exc)})
 
     # The shared event log is deliberately never wiped between rounds (it's
     # how cross-round learning works), but that means a fresh round would

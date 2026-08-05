@@ -140,6 +140,35 @@ def test_run_prepares_white_memory_at_round_start(tmp_path):
     assert white_data["entries"][0]["assigned_flag"]
 
 
+def test_run_survives_corrupt_white_memory_at_round_start(tmp_path):
+    """H56: prepare_round() is called before go.flag/stop.flag are recreated
+    for the new round -- an uncaught ValueError here (Task 11's typed
+    corrupt-memory error) would kill the referee process into a permanent
+    silent hang, since nothing else ever writes go.flag. Must degrade to an
+    empty-memory round instead of crashing."""
+    config = _config(tmp_path, max_round_seconds=0)
+    Path(config.white_memory_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(config.white_memory_path).write_text("{not valid json", encoding="utf-8")
+
+    run(config)  # must not raise
+
+    assessments = [json.loads(l) for l in Path(config.referee_log_path).read_text().splitlines()]
+    assert any(a["phase"] == "round_over" and a["outcome"] == "budget_expired" for a in assessments)
+    assert any(a["phase"] == "memory_corrupt" for a in assessments)
+
+
+def test_run_survives_corrupt_red_memory_at_round_start(tmp_path):
+    config = _config(tmp_path, max_round_seconds=0)
+    Path(config.red_memory_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(config.red_memory_path).write_text("{not valid json", encoding="utf-8")
+
+    run(config)  # must not raise
+
+    assessments = [json.loads(l) for l in Path(config.referee_log_path).read_text().splitlines()]
+    assert any(a["phase"] == "round_over" and a["outcome"] == "budget_expired" for a in assessments)
+    assert any(a["phase"] == "memory_corrupt" for a in assessments)
+
+
 def test_run_never_writes_assessment_into_shared_event_log(tmp_path):
     config = _config(tmp_path, max_round_seconds=0)
     run(config)
