@@ -7,12 +7,21 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
-    ports:
-      # H71: bound to 127.0.0.1 only, not all interfaces -- target ships
-      # real seeded vulnerabilities (SQLi, bruteforce, IDOR, OS command
-      # injection with NET_ADMIN), same loopback-only posture Task 8
-      # established for Wazuh's exposed ports (H48/H53).
-      - "127.0.0.1:5000:5000"
+    # H71 correction: target must NEVER get a ports: entry or join any
+    # non-internal network directly. A security review of the first H71
+    # attempt (which added target-host-net -- non-internal -- directly to
+    # target) live-verified that non-internal bridge networks get Docker's
+    # default outbound NAT/masquerade rule: target gained real internet
+    # egress (confirmed: `curl https://example.com/` from inside the
+    # container returned 200). That breaks this project's own explicit
+    # Non-Negotiable (docs/design.md: "The target stays fully egress-
+    # blocked... no real internet egress, ever. This is what makes live
+    # attack automation safe to build and run at all.") -- target carries
+    # a seeded OS command injection with NET_ADMIN, so a real egress path
+    # is a real exfiltration/C2 channel post-compromise. See target-relay
+    # below for the actual fix: a separate, non-exploitable forwarding-
+    # only container is the thing that touches a non-internal network,
+    # never target itself.
     networks:
       - lab-net
       # Task 8 (H7 network-segmentation half): target is the only service
@@ -21,10 +30,6 @@ services:
       # control-plane network, for agent enrollment) -- this is what lets
       # red_agent stay off wazuh-net entirely while target still enrolls.
       - wazuh-net
-      # H71: target-host-net, see its own networks: comment below --
-      # lab-net/wazuh-net are both internal:true, which silently prevented
-      # the ports: mapping above from ever actually binding.
-      - target-host-net
     depends_on:
       - wazuh.manager
     healthcheck:
@@ -64,6 +69,39 @@ services:
       # (see that service's volumes) -- entrypoint.sh reads it to pass
       # agent-auth -P, matching wazuh_manager.conf's <use_password>yes</use_password>.
       - ./wazuh/config/wazuh_cluster/authd.pass:/run/secrets/wazuh_authd.pass:ro
+
+  target-relay:
+    # H71: forwarding-only container so a human operator can browse to
+    # http://localhost:5000 and manually try target's seeded vulnerabilities
+    # -- target itself never gets a ports: entry or non-internal network
+    # membership (see target's own networks: comment for why: it would
+    # give target real internet egress, breaking the project's egress-
+    # block Non-Negotiable). This container has no application code of its
+    # own (a stock, minimal socat image, no custom build) and never
+    # initiates outbound connections anywhere except target:5000 on
+    # lab-net -- nothing meaningful to compromise or exfiltrate through,
+    # unlike target. Same pattern as the throwaway alpine/socat relay used
+    # ad hoc for a live view earlier in this project's history, now made a
+    # permanent, first-class part of the stack per explicit user request.
+    image: alpine/socat
+    container_name: purple-lab-target-relay
+    restart: unless-stopped
+    command: tcp-listen:5000,fork,reuseaddr tcp-connect:target:5000
+    ports:
+      # H71: bound to 127.0.0.1 only, not all interfaces -- target ships
+      # real seeded vulnerabilities (SQLi, bruteforce, IDOR, OS command
+      # injection with NET_ADMIN), same loopback-only posture Task 8
+      # established for Wazuh's exposed ports (H48/H53).
+      - "127.0.0.1:5000:5000"
+    networks:
+      - lab-net
+      # target-host-net, see its own networks: comment below -- lab-net is
+      # internal:true, which is why this relay needs a second, non-
+      # internal network for the ports: mapping above to actually bind.
+      - target-host-net
+    depends_on:
+      target:
+        condition: service_healthy
 
   red_agent:
     build:
@@ -517,26 +555,46 @@ networks:
     # reachable by raw IP, gated only by WAZUH_DASHBOARD_PASSWORD).
   target-host-net:
     driver: bridge
-    # H71: single-purpose network, ONLY target is ever attached to it --
-    # do not add any other service, mirroring dashboard-host-net's own
-    # pattern below. A network with internal:true can never have a
-    # host-published port bound (target's own "127.0.0.1:5000:5000" had
-    # silently never worked since the project's first commit, since
-    # target's only networks were lab-net/wazuh-net, both internal:true --
-    # confirmed live via `docker inspect` showing an empty
+    # H71: single-purpose network, ONLY target-relay is ever attached to
+    # it -- never target itself, and do not add any other service.
+    # target's own "ports: 127.0.0.1:5000:5000" (added directly to target
+    # in this network, in the first H71 attempt) silently never worked --
+    # target's only networks were lab-net/wazuh-net, both internal:true,
+    # and a network with internal:true can never have a host-published
+    # port bound (confirmed live via `docker inspect` showing an empty
     # NetworkSettings.Ports despite HostConfig.PortBindings accepting the
-    # mapping). target needs at least one non-internal network for the
-    # port publish to actually bind.
+    # mapping).
+    #
+    # CORRECTED (security review of the first H71 attempt): attaching
+    # target itself to this non-internal network fixed the port publish
+    # but also silently gave target real internet egress -- confirmed
+    # live (`curl https://example.com/` from inside target returned 200)
+    # -- because non-internal bridge networks get Docker's default
+    # outbound NAT/masquerade rule. That breaks this project's explicit
+    # Non-Negotiable (docs/design.md: target stays fully egress-blocked,
+    # no real internet egress, ever) and matters concretely here: target
+    # carries a seeded OS command injection with NET_ADMIN, so real
+    # egress is a real post-compromise exfiltration/C2 channel. Fixed by
+    # moving this network membership + the port publish onto a new
+    # target-relay service (see its own comment) that does nothing but
+    # forward TCP to target:5000 -- target itself now has zero non-
+    # internal network membership again, same as before H71.
     #
     # Same residual caveat as dashboard-host-net (Task 8 fix round 2): raw-
     # IP reachability to a published port is not fully gated by network
     # membership on this Docker Desktop/WSL2 engine (Docker's per-
-    # published-port ACCEPT rule doesn't check source network). This is
-    # inconsequential here, unlike for wazuh.dashboard: target already
-    # shares lab-net with red_agent/blue_agent by design -- that's the
-    # actual attack surface, not a boundary being protected -- so this
-    # network adds no new exposure for the agents. It only exists to make
-    # the host-level port publish work for a human operator.
+    # published-port ACCEPT rule doesn't check source network) -- so
+    # anything else on this Docker host with a route to a non-internal
+    # network, including round_helper (agent-net) and containers from
+    # unrelated projects, could in principle reach target-relay:5000 by
+    # raw IP even without target-host-net membership. Unlike the
+    # dashboard-host-net case, this is genuinely inconsequential here:
+    # target-relay has no application code, no credentials, no data, and
+    # initiates no outbound connections except to target:5000 on lab-net
+    # -- there is nothing on it to compromise or exfiltrate. It exists
+    # solely to make the host-level port publish work for a human
+    # operator, and reaching it grants nothing beyond what the front door
+    # (http://localhost:5000) already grants by design.
   agent-net:
     driver: bridge
     # Deliberately NOT internal — this is how red/blue agent containers

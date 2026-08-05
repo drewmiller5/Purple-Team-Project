@@ -40,11 +40,19 @@ routable or non-localhost interface.
 
 ### Target app (host port 5000) -- the attack surface itself
 
-`target` is also reachable directly at `http://localhost:5000` (bound to
-`127.0.0.1` only), so a human operator can browse to it and manually try
-the four seeded vulnerabilities below, not just watch `red_agent` do it
-automatically. No auth in front of it -- that's intentional, it's the thing
-being attacked.
+`target` is reachable at `http://localhost:5000` (bound to `127.0.0.1`
+only) via a small forwarding-only `target-relay` container, so a human
+operator can browse to it and manually try the four seeded vulnerabilities
+below, not just watch `red_agent` do it automatically. No auth in front of
+it -- that's intentional, it's the thing being attacked. `target` itself
+never has a published port or a non-internal network of its own (that
+would give it real internet egress, which this project's design
+explicitly forbids -- see `docker-compose.yml`'s `target-host-net`
+comment); the relay is the only thing that touches a non-internal network,
+and it has no application code, credentials, or data of its own to
+compromise. Same `127.0.0.1`-under-"mirrored"-WSL2-networking caveat below
+applies here too, with a worse consequence if it ever occurs -- unlike the
+Wazuh services, nothing gates access to `target` at all.
 
 ## Security notes
 
