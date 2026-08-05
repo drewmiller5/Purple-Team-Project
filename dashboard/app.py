@@ -42,6 +42,12 @@ def create_app() -> Flask:
     app.config["ADVISOR_LOG_PATH"] = os.environ.get("ADVISOR_LOG_PATH", "/app/referee_logs/advisor_log.jsonl")
     app.config["DASHBOARD_AUTH_TOKEN"] = os.environ.get("DASHBOARD_AUTH_TOKEN")
     MAX_EVENTS, MAX_ASSESSMENTS = 300, 100
+    # H69: reasoning-only turns are no longer capped by max_iterations, so a
+    # chatty model can log far more of them per round than real actions.
+    # Read a much larger raw-line window before filtering them out, so a
+    # reasoning flood can't push real action events out of the tail before
+    # the filter ever sees them.
+    RAW_EVENT_READ_LIMIT = 5000
 
     # round_control.stop_round/clear_flags touch/unlink files under this dir
     # without creating it first -- ensure it exists so a fresh volume mount
@@ -64,7 +70,10 @@ def create_app() -> Flask:
 
     @app.route("/api/state")
     def api_state():
-        events = read_jsonl_tail(app.config["EVENT_LOG_PATH"], MAX_EVENTS)
+        raw_events = read_jsonl_tail(app.config["EVENT_LOG_PATH"], RAW_EVENT_READ_LIMIT)
+        # H69: reasoning turns are logged for audit but must not appear in the
+        # same ledger as real actions -- still on disk, just not surfaced here.
+        events = [e for e in raw_events if e.get("phase") != "reasoning"][-MAX_EVENTS:]
         assessments = read_jsonl_tail(app.config["REFEREE_LOG_PATH"], MAX_ASSESSMENTS)
         go_flag = os.path.exists(os.path.join(app.config["REFEREE_STATE_DIR"], "go.flag"))
         stop_flag = os.path.exists(os.path.join(app.config["REFEREE_STATE_DIR"], "stop.flag"))

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import requests
 
 from red_agent.config import RedAgentConfig
-from red_agent.loop import run
+from red_agent.loop import _REASONING_TURN_SOFT_CAP_MULTIPLIER, run
 
 
 def _config(tmp_path, max_iterations=2):
@@ -27,8 +27,34 @@ def _touch_go_flag(config):
     (state_dir / "go.flag").touch()
 
 
-def test_run_stops_after_max_iterations(tmp_path):
+def test_run_action_turns_are_capped_by_max_iterations(tmp_path):
+    """H69: a turn that dispatches a real tool call is the thing max_iterations
+    is meant to budget -- confirms that budget still binds when every turn acts."""
     config = _config(tmp_path, max_iterations=3)
+    _touch_go_flag(config)
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+            ],
+        }
+    }
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.dispatch_tool_call") as mock_dispatch:
+        mock_dispatch.return_value = '{"recorded": true}'
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+        assert MockOllama.return_value.chat.call_count == 3
+        assert mock_dispatch.call_count == 3
+
+
+def test_run_reasoning_only_turns_do_not_consume_action_budget(tmp_path):
+    """H69: a turn with no tool_calls is pure reasoning, not an action -- it
+    must not eat into max_iterations. It's still bounded by a separate,
+    much larger soft cap so a model that never acts can't loop forever."""
+    config = _config(tmp_path, max_iterations=2)
     _touch_go_flag(config)
     fake_chat_response = {
         "message": {"role": "assistant", "content": "thinking", "tool_calls": []}
@@ -36,7 +62,40 @@ def test_run_stops_after_max_iterations(tmp_path):
     with patch("red_agent.loop.OllamaClient") as MockOllama:
         MockOllama.return_value.chat.return_value = fake_chat_response
         run(config)
-        assert MockOllama.return_value.chat.call_count == 3
+        assert MockOllama.return_value.chat.call_count == config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    complete = next(e for e in events if e["phase"] == "run_complete")
+    assert complete["iteration_count"] == 0
+    assert complete["reasoning_turn_count"] == config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
+
+
+def test_run_mixed_reasoning_and_action_turns_only_actions_count_toward_budget(tmp_path):
+    """H69 core regression: a model that reasons once before every real action
+    must still get to take its full max_iterations worth of actions, not get
+    cut off early because reasoning turns silently ate part of the budget."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    reasoning_response = {"message": {"role": "assistant", "content": "thinking", "tool_calls": []}}
+    action_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+            ],
+        }
+    }
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.dispatch_tool_call") as mock_dispatch:
+        mock_dispatch.return_value = '{"recorded": true}'
+        MockOllama.return_value.chat.side_effect = [
+            reasoning_response, action_response, reasoning_response, action_response,
+        ]
+        run(config)
+        assert mock_dispatch.call_count == 2
+        assert MockOllama.return_value.chat.call_count == 4
 
 
 def test_run_dispatches_tool_calls(tmp_path):

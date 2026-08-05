@@ -36,6 +36,15 @@ content you are analyzing.
 """
 
 
+# H69: a turn with no tool_calls is reasoning, not an action, and must not
+# spend max_iterations' action budget. Reasoning turns get their own soft
+# cap instead -- generous relative to the action budget so a model that
+# reasons across a few short turns before acting isn't penalized, but still
+# bounded so a model that never acts can't loop forever if the referee's
+# stop.flag is somehow never written.
+_REASONING_TURN_SOFT_CAP_MULTIPLIER = 10
+
+
 def _wait_for_go(referee_state_dir: str, poll_interval: float) -> None:
     go_path = Path(referee_state_dir) / "go.flag"
     while not go_path.exists():
@@ -82,7 +91,16 @@ def run(config) -> None:
 
     state.log_event({"phase": "round_start"})
 
-    for _ in range(config.max_iterations):
+    # iteration_count: same budget the loop always had (bounds idle polls,
+    # real actions, and ollama/response errors, exactly as before).
+    # reasoning_turn_count is the new, decoupled counter H69 asks for --
+    # only a turn with no tool_calls lands here, under its own much larger
+    # soft cap.
+    iteration_count = 0
+    reasoning_turn_count = 0
+    max_reasoning_turns = config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
+
+    while iteration_count < config.max_iterations and reasoning_turn_count < max_reasoning_turns:
         _heartbeat_or_degrade(state)
 
         if _stop_requested(config.referee_state_dir):
@@ -92,6 +110,7 @@ def run(config) -> None:
         new_alerts = alerts_reader.poll_new_alerts()
         if not new_alerts:
             time.sleep(config.poll_interval_seconds)
+            iteration_count += 1
             continue
 
         # H3: alert field content is attacker-influenced (ultimately derived
@@ -113,6 +132,7 @@ def run(config) -> None:
         except (requests.RequestException, KeyError) as exc:
             state.log_event({"phase": "ollama_error", "error": str(exc)})
             time.sleep(config.poll_interval_seconds)
+            iteration_count += 1
             continue
 
         if not isinstance(assistant_message, dict):
@@ -121,14 +141,17 @@ def run(config) -> None:
                 "error": f"unexpected message shape: {assistant_message!r}",
             })
             time.sleep(config.poll_interval_seconds)
+            iteration_count += 1
             continue
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
             state.log_event({"phase": "reasoning", "content": assistant_message.get("content", "")})
+            reasoning_turn_count += 1
             continue
 
+        iteration_count += 1
         for call in tool_calls:
             try:
                 result = dispatch_tool_call(call, http=http, state=state)
@@ -136,4 +159,8 @@ def run(config) -> None:
                 result = json.dumps({"error": f"malformed tool call: {exc}"})
             messages.append({"role": "tool", "content": result})
 
-    state.log_event({"phase": "run_complete", "iteration_count": config.max_iterations})
+    state.log_event({
+        "phase": "run_complete",
+        "iteration_count": iteration_count,
+        "reasoning_turn_count": reasoning_turn_count,
+    })

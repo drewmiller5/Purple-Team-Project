@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from blue_agent.config import BlueAgentConfig
-from blue_agent.loop import run
+from blue_agent.loop import _REASONING_TURN_SOFT_CAP_MULTIPLIER, run
 
 
 def _config(tmp_path, max_iterations=3):
@@ -92,6 +92,80 @@ def test_run_calls_ollama_and_dispatches_tool_calls_when_new_alerts_appear(tmp_p
         run(config)
         mock_dispatch.assert_called_once()
         MockOllama.return_value.chat.assert_called_once()
+
+
+def test_run_action_turns_are_capped_by_max_iterations(tmp_path):
+    """H69: a turn that dispatches a real tool call is the thing max_iterations
+    is meant to budget -- confirms the budget still binds when every turn acts."""
+    config = _config(tmp_path, max_iterations=3)
+    _touch_go_flag(config)
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "recall_past_findings", "arguments": {}}}
+            ],
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.WazuhAlertsReader") as MockAlerts, \
+         patch("blue_agent.loop.dispatch_tool_call") as mock_dispatch:
+        MockAlerts.return_value.poll_new_alerts.return_value = [{"rule": {"id": "100101"}}]
+        mock_dispatch.return_value = "ok"
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+        assert MockOllama.return_value.chat.call_count == 3
+        assert mock_dispatch.call_count == 3
+
+
+def test_run_reasoning_only_turns_do_not_consume_action_budget(tmp_path):
+    """H69: a turn with no tool_calls is pure reasoning, not an action -- it
+    must not eat into max_iterations. It's still bounded by a separate,
+    much larger soft cap so a model that never acts can't loop forever."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    reasoning_response = {"message": {"role": "assistant", "content": "thinking", "tool_calls": []}}
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.WazuhAlertsReader") as MockAlerts:
+        MockAlerts.return_value.poll_new_alerts.return_value = [{"rule": {"id": "100101"}}]
+        MockOllama.return_value.chat.return_value = reasoning_response
+        run(config)
+        assert MockOllama.return_value.chat.call_count == config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    complete = next(e for e in events if e["phase"] == "run_complete")
+    assert complete["iteration_count"] == 0
+    assert complete["reasoning_turn_count"] == config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
+
+
+def test_run_mixed_reasoning_and_action_turns_only_actions_count_toward_budget(tmp_path):
+    """H69 core regression: a model that reasons once before every real action
+    must still get to take its full max_iterations worth of actions."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+    reasoning_response = {"message": {"role": "assistant", "content": "thinking", "tool_calls": []}}
+    action_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "recall_past_findings", "arguments": {}}}
+            ],
+        }
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.WazuhAlertsReader") as MockAlerts, \
+         patch("blue_agent.loop.dispatch_tool_call") as mock_dispatch:
+        MockAlerts.return_value.poll_new_alerts.return_value = [{"rule": {"id": "100101"}}]
+        mock_dispatch.return_value = "ok"
+        MockOllama.return_value.chat.side_effect = [
+            reasoning_response, action_response, reasoning_response, action_response,
+        ]
+        run(config)
+        assert mock_dispatch.call_count == 2
+        assert MockOllama.return_value.chat.call_count == 4
 
 
 def test_run_wraps_alert_content_in_untrusted_data_delimiters(tmp_path):
