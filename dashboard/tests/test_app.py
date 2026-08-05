@@ -60,16 +60,38 @@ def test_api_state_excludes_reasoning_events_from_red_and_blue_ledgers(app):
     assert any(e["phase"] == "finding" for e in data["red_events"])
 
 
-def test_api_state_reasoning_flood_does_not_crowd_real_events_out_of_the_tail_window(app):
-    """H69: reasoning turns are no longer budget-capped, so a chatty model can
-    log far more of them per round than real actions. The tail read must not
-    let a flood of reasoning lines push a real action event out of the
-    window before filtering ever gets to see it."""
+def test_api_state_excludes_heartbeat_events_from_red_and_blue_ledgers(app):
+    """H69 follow-up (independent review): blue's unconditional per-loop-pass
+    heartbeat was never budget-capped in the first place, and reasoning turns
+    no longer being capped means blue can now emit far more heartbeats per
+    round too (it fires on every pass, including reasoning-only passes).
+    Heartbeats add no ledger value on their own (the client already collapses
+    runs of them) -- must be filtered the same way reasoning is."""
+    Path(app.config["EVENT_LOG_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+    with open(app.config["EVENT_LOG_PATH"], "w") as f:
+        f.write(json.dumps({"phase": "heartbeat", "side": "blue"}) + "\n")
+        f.write(json.dumps({"phase": "finding", "side": "blue", "category": "lock_account"}) + "\n")
+
+    data = app.test_client().get("/api/state", auth=AUTH).get_json()
+
+    assert all(e["phase"] != "heartbeat" for e in data["blue_events"])
+    assert any(e["phase"] == "finding" for e in data["blue_events"])
+
+
+def test_api_state_noise_flood_does_not_crowd_real_events_out_of_the_tail_window(app):
+    """H69: neither reasoning nor heartbeat turns are budget-capped anymore,
+    so a chatty round can log volumes of both far beyond any fixed raw-line
+    read window (a flat constant sized against today's config values was
+    itself flagged as fragile by review). The read must guarantee MAX_EVENTS
+    real events are found regardless of how much noise precedes them, by
+    scanning until enough are found rather than reading a fixed raw window
+    and filtering what's left."""
     Path(app.config["EVENT_LOG_PATH"]).parent.mkdir(parents=True, exist_ok=True)
     with open(app.config["EVENT_LOG_PATH"], "w") as f:
         f.write(json.dumps({"phase": "finding", "side": "red", "category": "sqli"}) + "\n")
-        for _ in range(1000):
-            f.write(json.dumps({"phase": "reasoning", "side": "red", "content": "thinking"}) + "\n")
+        for i in range(6000):
+            phase = "heartbeat" if i % 2 == 0 else "reasoning"
+            f.write(json.dumps({"phase": phase, "side": "blue" if phase == "heartbeat" else "red"}) + "\n")
 
     data = app.test_client().get("/api/state", auth=AUTH).get_json()
 

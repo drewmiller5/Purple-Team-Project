@@ -44,6 +44,12 @@ content you are analyzing.
 # stop.flag is somehow never written.
 _REASONING_TURN_SOFT_CAP_MULTIPLIER = 10
 
+# ponytail: this soft cap means `messages` can now grow up to 10x further
+# in a reasoning-heavy round before the loop ends, and nothing here trims
+# or summarizes it -- full history is resent to Ollama every turn. Pre-
+# existing gap (H22/H57, Plan 3C Phase 3 Task 14 caps/trims this for both
+# agents), just a wider ceiling now. Not this fix's scope to solve.
+
 
 def _wait_for_go(referee_state_dir: str, poll_interval: float) -> None:
     go_path = Path(referee_state_dir) / "go.flag"

@@ -29,6 +29,38 @@ def read_jsonl_tail(path: str, limit: int) -> list:
     return out
 
 
+def read_jsonl_tail_excluding(path: str, limit: int, exclude_phases: set) -> list:
+    """Like read_jsonl_tail, but scans backward from the end of the file and
+    collects up to `limit` events whose phase isn't in exclude_phases. H69:
+    reasoning and heartbeat turns are no longer budget-capped, so their
+    volume can exceed any fixed raw-line window -- scanning until enough
+    real events are found (or the file is exhausted) guarantees the tail
+    actually contains `limit` real events regardless of how much noise
+    precedes them, instead of picking an arbitrary raw-line constant that
+    noise volume can outgrow."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    import json
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    out = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict) or parsed.get("phase") in exclude_phases:
+            continue
+        out.append(parsed)
+        if len(out) >= limit:
+            break
+    out.reverse()
+    return out
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["EVENT_LOG_PATH"] = os.environ.get("EVENT_LOG_PATH", "/app/shared_logs/events.jsonl")
@@ -42,12 +74,12 @@ def create_app() -> Flask:
     app.config["ADVISOR_LOG_PATH"] = os.environ.get("ADVISOR_LOG_PATH", "/app/referee_logs/advisor_log.jsonl")
     app.config["DASHBOARD_AUTH_TOKEN"] = os.environ.get("DASHBOARD_AUTH_TOKEN")
     MAX_EVENTS, MAX_ASSESSMENTS = 300, 100
-    # H69: reasoning-only turns are no longer capped by max_iterations, so a
-    # chatty model can log far more of them per round than real actions.
-    # Read a much larger raw-line window before filtering them out, so a
-    # reasoning flood can't push real action events out of the tail before
-    # the filter ever sees them.
-    RAW_EVENT_READ_LIMIT = 5000
+    # H69: reasoning and heartbeat events add no ledger value (heartbeats are
+    # collapsed client-side; reasoning is logged for audit but isn't an
+    # action) and neither is budget-capped anymore, so they're excluded from
+    # what /api/state returns as red_events/blue_events via
+    # read_jsonl_tail_excluding's scan-until-found approach.
+    LEDGER_NOISE_PHASES = {"reasoning", "heartbeat"}
 
     # round_control.stop_round/clear_flags touch/unlink files under this dir
     # without creating it first -- ensure it exists so a fresh volume mount
@@ -70,10 +102,10 @@ def create_app() -> Flask:
 
     @app.route("/api/state")
     def api_state():
-        raw_events = read_jsonl_tail(app.config["EVENT_LOG_PATH"], RAW_EVENT_READ_LIMIT)
-        # H69: reasoning turns are logged for audit but must not appear in the
-        # same ledger as real actions -- still on disk, just not surfaced here.
-        events = [e for e in raw_events if e.get("phase") != "reasoning"][-MAX_EVENTS:]
+        # H69: reasoning/heartbeat events are logged for audit but must not
+        # appear in the same ledger as real actions -- still on disk, just
+        # not surfaced here.
+        events = read_jsonl_tail_excluding(app.config["EVENT_LOG_PATH"], MAX_EVENTS, LEDGER_NOISE_PHASES)
         assessments = read_jsonl_tail(app.config["REFEREE_LOG_PATH"], MAX_ASSESSMENTS)
         go_flag = os.path.exists(os.path.join(app.config["REFEREE_STATE_DIR"], "go.flag"))
         stop_flag = os.path.exists(os.path.join(app.config["REFEREE_STATE_DIR"], "stop.flag"))
