@@ -51,8 +51,13 @@ routable or non-localhost interface.
   (`wazuh/config/wazuh_cluster/authd.pass`, generated locally, gitignored).
   `red_agent` is not attached to `wazuh-net` (the network `wazuh.manager`/
   `wazuh.indexer`/`wazuh.dashboard` share) -- only `target` is, multi-homed
-  for agent enrollment. This closes findings H7, H48, H52 (partial -- see
-  below), and H53 in `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`.
+  for agent enrollment. This closes findings H7 and H48, and closes H53's
+  hostname/DNS-based access (raw-IP access to `wazuh.dashboard` from
+  `agent-net`/`lab-net` remains open -- believed to be a general Docker
+  `ports:` publishing behavior, not this platform specifically; see
+  `docker-compose.yml`'s `wazuh.dashboard` `networks:` comment). H52
+  (partial -- see below) is also open. See
+  `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md` for full detail.
   Caveat: `127.0.0.1`-only binding can behave inconsistently under Docker
   Desktop/WSL2's networking modes (e.g. "mirrored" WSL2 networking has had
   reports of loopback-bound ports being reachable from elsewhere on the
