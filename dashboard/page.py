@@ -238,9 +238,9 @@ PAGE = """
   <h1>Purple Team Live View</h1>
   <div class="spacer"></div>
   <div class="round-controls">
-    <button id="btn-start" class="ctrl-go">Clear Flags</button>
+    <button id="btn-clear">Clear Flags</button>
     <button id="btn-stop" class="ctrl-stop">Stop Round</button>
-    <button id="btn-restart">Restart Round</button>
+    <button id="btn-start" class="ctrl-go">Start Round</button>
   </div>
   <span id="round-badge" class="badge idle"><span class="dot"></span>loading&hellip;</span>
 </header>
@@ -552,9 +552,9 @@ for (const btn of document.querySelectorAll('nav.tabs button')) {
 // operator enters credentials for this origin, it caches and resends them
 // automatically on every fetch() below. No Authorization header handling
 // needed here.
-document.getElementById('btn-start').addEventListener('click', () => fetch('/api/round/start', { method: 'POST' }).then(tick));
+document.getElementById('btn-clear').addEventListener('click', () => fetch('/api/round/clear', { method: 'POST' }).then(tick));
 document.getElementById('btn-stop').addEventListener('click', () => fetch('/api/round/stop', { method: 'POST' }).then(tick));
-document.getElementById('btn-restart').addEventListener('click', () => fetch('/api/round/restart', { method: 'POST' }).then(tick));
+document.getElementById('btn-start').addEventListener('click', () => fetch('/api/round/start', { method: 'POST' }).then(tick));
 
 function showToast(message, ok) {
   const toast = document.getElementById('found-it-toast');

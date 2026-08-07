@@ -7,7 +7,7 @@ from flask import Flask, jsonify, render_template_string, request
 from dashboard.actions import run_blue_action, run_red_action
 from dashboard.advisor import ask_advisor
 from dashboard.page import PAGE
-from dashboard.round_control import clear_flags, restart_round, stop_round
+from dashboard.round_control import clear_flags, start_round, stop_round
 
 
 def read_jsonl_tail(path: str, limit: int) -> list:
@@ -124,8 +124,12 @@ def create_app() -> Flask:
             "latest_round_result": latest_round_result,
         })
 
-    @app.route("/api/round/start", methods=["POST"])
-    def round_start():
+    @app.route("/api/round/clear", methods=["POST"])
+    def round_clear():
+        # Real bug found live: this was previously mounted at /api/round/start
+        # (a mislabel with zero test coverage) -- it clears go.flag/stop.flag,
+        # it doesn't start anything. Collided with the real round-start
+        # feature's route once that got wired up.
         clear_flags(app.config["REFEREE_STATE_DIR"])
         return jsonify({"cleared": True})
 
@@ -133,9 +137,9 @@ def create_app() -> Flask:
     def round_stop():
         return jsonify(stop_round(app.config["REFEREE_STATE_DIR"]))
 
-    @app.route("/api/round/restart", methods=["POST"])
-    def round_restart():
-        return jsonify(restart_round(app.config["ROUND_HELPER_URL"], app.config["INTERNAL_ACTION_TOKEN"]))
+    @app.route("/api/round/start", methods=["POST"])
+    def round_start():
+        return jsonify(start_round(app.config["ROUND_HELPER_URL"], app.config["INTERNAL_ACTION_TOKEN"]))
 
     @app.route("/api/red-action", methods=["POST"])
     def red_action():

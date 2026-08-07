@@ -98,19 +98,39 @@ def test_api_state_noise_flood_does_not_crowd_real_events_out_of_the_tail_window
     assert any(e["phase"] == "finding" for e in data["red_events"])
 
 
+def test_round_clear_endpoint_clears_both_flag_files(app):
+    """Real bug found live: this route was previously registered at
+    /api/round/start (a copy-paste-shaped mislabel, zero test coverage) --
+    it clears go.flag/stop.flag, it doesn't start anything. That path
+    collided with the actual round-start feature's own /api/round/start
+    once that got wired up, which is what surfaced this. Moved to
+    /api/round/clear to match what it actually does."""
+    state_dir = Path(app.config["REFEREE_STATE_DIR"])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "go.flag").touch()
+    (state_dir / "stop.flag").touch()
+
+    response = app.test_client().post("/api/round/clear", auth=AUTH)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"cleared": True}
+    assert not (state_dir / "go.flag").exists()
+    assert not (state_dir / "stop.flag").exists()
+
+
 def test_round_stop_endpoint_touches_stop_flag(app):
     response = app.test_client().post("/api/round/stop", auth=AUTH)
     assert response.status_code == 200
     assert Path(app.config["REFEREE_STATE_DIR"], "stop.flag").exists()
 
 
-def test_round_restart_endpoint_calls_round_helper(app):
-    with patch("dashboard.app.restart_round", autospec=True) as mock_restart:
-        mock_restart.return_value = {"restarted": ["referee", "red_agent", "blue_agent"]}
-        response = app.test_client().post("/api/round/restart", auth=AUTH)
+def test_round_start_endpoint_calls_round_helper(app):
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post("/api/round/start", auth=AUTH)
 
     assert response.status_code == 200
-    mock_restart.assert_called_once_with("http://round_helper:8090", "secret-token")
+    mock_start.assert_called_once_with("http://round_helper:8090", "secret-token")
 
 
 def test_red_action_endpoint_delegates_to_run_red_action(app):

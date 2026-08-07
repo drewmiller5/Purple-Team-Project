@@ -13,10 +13,10 @@ def stop_round(state_dir: str) -> dict:
     return {"stopped": True}
 
 
-def restart_round(helper_url: str, internal_action_token: str) -> dict:
+def start_round(helper_url: str, internal_action_token: str) -> dict:
     try:
         response = requests.post(
-            f"{helper_url}/restart-round",
+            f"{helper_url}/start-round",
             headers={"X-Internal-Action-Token": internal_action_token},
             timeout=60,
         )

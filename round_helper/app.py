@@ -15,8 +15,8 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")
 
-    @app.route("/restart-round", methods=["POST"])
-    def restart_round():
+    @app.route("/start-round", methods=["POST"])
+    def start_round():
         expected_token = app.config.get("INTERNAL_ACTION_TOKEN")
         supplied_token = request.headers.get("X-Internal-Action-Token")
 
@@ -27,10 +27,18 @@ def create_app() -> Flask:
         # dockerd, never the `docker` CLI binary -- subprocess.run(["docker",
         # "start", ...]) always failed with FileNotFoundError, live-verified.
         # The SDK talks to docker.sock directly, no CLI binary dependency.
+        #
+        # .restart(), not .start(): a plain `docker start` no-ops on an
+        # already-running container, so clicking this mid-round did nothing
+        # -- user found this live. restart() forces a fresh process every
+        # time regardless of whether the containers were running or already
+        # exited, and referee/loop.py already unconditionally clears
+        # go.flag/stop.flag on every fresh start, so no separate
+        # flag-clearing step is needed either.
         try:
             client = docker.from_env()
             for name in ALLOWED_CONTAINERS:
-                client.containers.get(name).start()
+                client.containers.get(name).restart()
         except (docker.errors.DockerException, OSError) as exc:
             # Review-round fix: docker-py's per-request HTTP calls only wrap
             # requests.exceptions.HTTPError into a DockerException -- a raw
@@ -40,7 +48,7 @@ def create_app() -> Flask:
             # degrades to the endpoint's JSON error contract instead of
             # propagating into Flask's generic 500 page.
             return jsonify({"error": str(exc)}), 500
-        return jsonify({"restarted": ALLOWED_CONTAINERS})
+        return jsonify({"started": ALLOWED_CONTAINERS})
 
     return app
 
