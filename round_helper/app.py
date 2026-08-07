@@ -1,14 +1,13 @@
 import hmac
 import os
-import subprocess
 
+import docker
 from flask import Flask, jsonify, request
 
 # Real container names (docker-compose.yml's container_name: values), not
-# compose service names -- `docker start` operates on the container, and
-# these containers already exist (built once by `docker compose up`); this
-# revives them, it never builds or recreates anything, so it needs no
-# compose file or build context inside this container, only the socket.
+# compose service names -- these containers already exist (built once by
+# `docker compose up`); this revives them via docker.sock directly, it never
+# builds or recreates anything.
 ALLOWED_CONTAINERS = ["purple-lab-referee", "purple-lab-red", "purple-lab-blue"]
 
 
@@ -24,12 +23,23 @@ def create_app() -> Flask:
         if not (expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token)):
             return jsonify({"error": "unauthorized"}), 401
 
-        result = subprocess.run(
-            ["docker", "start", *ALLOWED_CONTAINERS],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode != 0:
-            return jsonify({"error": result.stderr or "docker start failed"}), 500
+        # Root-cause fix: the image's docker.io apt package only installs
+        # dockerd, never the `docker` CLI binary -- subprocess.run(["docker",
+        # "start", ...]) always failed with FileNotFoundError, live-verified.
+        # The SDK talks to docker.sock directly, no CLI binary dependency.
+        try:
+            client = docker.from_env()
+            for name in ALLOWED_CONTAINERS:
+                client.containers.get(name).start()
+        except (docker.errors.DockerException, OSError) as exc:
+            # Review-round fix: docker-py's per-request HTTP calls only wrap
+            # requests.exceptions.HTTPError into a DockerException -- a raw
+            # ConnectionError (daemon mid-restart, socket hiccup) isn't a
+            # DockerException subclass but IS an OSError (requests'
+            # RequestException subclasses IOError/OSError), so this still
+            # degrades to the endpoint's JSON error contract instead of
+            # propagating into Flask's generic 500 page.
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"restarted": ALLOWED_CONTAINERS})
 
     return app

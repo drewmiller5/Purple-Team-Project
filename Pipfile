@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 flask = ">=3.0,<4.0"
+docker = "*"
 
 [dev-packages]
 pytest = "*"
