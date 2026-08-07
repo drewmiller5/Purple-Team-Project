@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from red_agent.config import RedAgentConfig
 from red_agent.state import RedAgentState
 from shared.event_log import read_events
@@ -53,3 +55,33 @@ def test_recall_summary_lists_recorded_findings(tmp_path):
     summary = state.recall_summary()
     assert "sqli" in summary
     assert "creds" in summary
+
+
+def test_heartbeat_logs_a_heartbeat_phase_event(tmp_path):
+    """K1: red_agent gets its own heartbeat, mirroring BlueAgentState.heartbeat()."""
+    state = RedAgentState(_config(tmp_path))
+    state.heartbeat()
+
+    events = read_events(str(tmp_path / "events.jsonl"))
+    assert len(events) == 1
+    assert events[0]["side"] == "red"
+    assert events[0]["phase"] == "heartbeat"
+
+
+def test_recon_done_defaults_to_false(tmp_path):
+    """K5: phase-gate state starts closed -- no recon-class request yet this round."""
+    state = RedAgentState(_config(tmp_path))
+    assert state.recon_done is False
+
+
+def test_log_event_survives_oserror_from_underlying_write(tmp_path):
+    """Review-round fix: every direct state.log_event(...) call site in
+    loop.py (round_stop_acknowledged, ollama_error, reasoning, run_complete,
+    memory_corrupt) routes through this one method. Guarding it here --
+    instead of only at the heartbeat call site -- is the root-cause fix,
+    mirroring BlueAgentState.log_event()'s existing guard: a disk-full/
+    permission OSError on the underlying file write must degrade (skip the
+    write), not crash the process."""
+    state = RedAgentState(_config(tmp_path))
+    with patch("red_agent.state.log_event", side_effect=OSError("disk full")):
+        state.log_event({"phase": "round_start"})  # must not raise

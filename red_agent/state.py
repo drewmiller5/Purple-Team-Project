@@ -5,11 +5,25 @@ from shared.memory import append_memory_entry, load_memory
 class RedAgentState:
     def __init__(self, config):
         self.config = config
+        # K5: phase-gate state -- no recon-class http_request has happened
+        # yet this round. Set True by tools.dispatch_tool_call once one lands.
+        self.recon_done = False
 
     def log_event(self, event: dict) -> None:
         event = dict(event)
         event["side"] = "red"
-        log_event(self.config.event_log_path, event)
+        try:
+            log_event(self.config.event_log_path, event)
+        except OSError:
+            # Review-round fix: every direct state.log_event(...) call site
+            # (heartbeat, reasoning, ollama_error, run_complete, etc.) routes
+            # through here. A disk-full/permission error writing the event
+            # log must degrade (skip the write), not crash the process --
+            # mirrors BlueAgentState.log_event()'s existing guard.
+            pass
+
+    def heartbeat(self) -> None:
+        self.log_event({"phase": "heartbeat"})
 
     def record_finding(self, category: str, detail: str, success: bool) -> None:
         entry = {"side": "red", "category": category, "detail": detail, "success": success}

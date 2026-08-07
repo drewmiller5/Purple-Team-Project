@@ -313,6 +313,50 @@ def test_run_handles_oserror_from_tool_dispatch_gracefully(tmp_path):
     assert any(e["phase"] == "run_complete" for e in events)
 
 
+def test_run_heartbeats_every_loop_iteration(tmp_path):
+    """K1: red_agent emits its own heartbeat each iteration, mirroring
+    blue's pattern, instead of being a free rider on blue's heartbeat."""
+    config = _config(tmp_path, max_iterations=3)
+    _touch_go_flag(config)
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+            ],
+        }
+    }
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.dispatch_tool_call") as mock_dispatch:
+        mock_dispatch.return_value = '{"recorded": true}'
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    heartbeats = [e for e in events if e["phase"] == "heartbeat"]
+    assert len(heartbeats) == 3
+
+
+def test_run_survives_oserror_from_heartbeat_disk_full(tmp_path):
+    """K1, mirroring H21's blue-side guard: state.heartbeat() runs
+    unconditionally every iteration -- a disk-full/permission OSError must
+    degrade (skip that heartbeat), not kill the process."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    fake_chat_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.state.RedAgentState.heartbeat", side_effect=OSError("disk full")):
+        MockOllama.return_value.chat.return_value = fake_chat_response
+        run(config)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert not any(e["phase"] == "heartbeat" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
 def test_run_handles_corrupt_memory_file_at_recall_gracefully(tmp_path):
     """K2: shared/memory.py's typed ValueError on corrupt JSON, raised from
     state.recall_summary() before _wait_for_go, must not crash the process

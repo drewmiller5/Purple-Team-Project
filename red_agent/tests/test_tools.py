@@ -95,3 +95,121 @@ def test_dispatch_http_request_missing_required_arg_returns_clean_error():
 
     parsed = json.loads(result)
     assert "error" in parsed
+
+
+def test_dispatch_http_request_injection_shaped_get_blocked_before_recon():
+    """K5: an injection-shaped GET (SQLi payload in params) is attack-class,
+    rejected before any recon-class request has happened this round."""
+    http = MagicMock()
+    state = MagicMock()
+    state.recon_done = False
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "GET", "path": "/search", "params": {"q": "' OR '1'='1"}},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    parsed = json.loads(result)
+    assert "error" in parsed
+    assert "recon" in parsed["error"].lower()
+
+
+def test_dispatch_http_request_post_is_attack_class_blocked_before_recon():
+    http = MagicMock()
+    state = MagicMock()
+    state.recon_done = False
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "POST", "path": "/admin/login", "data": {"username": "admin", "password": "x"}},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert "error" in json.loads(result)
+
+
+def test_dispatch_http_request_plain_get_is_recon_class_and_marks_recon_done():
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": "ok"}
+    state = MagicMock()
+    state.recon_done = False
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "GET", "path": "/", "params": None},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_called_once()
+    assert state.recon_done is True
+    assert json.loads(result) == {"status_code": 200, "body": "ok"}
+
+
+def test_dispatch_http_request_blind_sqli_and_keyword_blocked_before_recon():
+    """Review-round fix: the indicator list originally had ' or ' but not
+    ' and ', so a boolean-blind SQLi probe like 'id=1 AND 1=1' classified as
+    recon-class -- bypassing the gate AND opening it for every later
+    attack-class request this round. ' and ' must be a marker too."""
+    http = MagicMock()
+    state = MagicMock()
+    state.recon_done = False
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "GET", "path": "/product", "params": {"id": "1 AND 1=1"}},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert "error" in json.loads(result)
+    assert state.recon_done is False
+
+
+def test_dispatch_http_request_lowercase_get_is_not_attack_class():
+    """Review-round fix: classification must not depend on method casing --
+    a model emitting lowercase 'get' should still be treated as GET, not
+    misclassified as a non-GET (attack-class) method."""
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": "ok"}
+    state = MagicMock()
+    state.recon_done = False
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "get", "path": "/", "params": None},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_called_once()
+    assert state.recon_done is True
+
+
+def test_dispatch_http_request_attack_class_allowed_after_recon_done():
+    http = MagicMock()
+    http.request.return_value = {"status_code": 200, "body": "ok"}
+    state = MagicMock()
+    state.recon_done = True
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "POST", "path": "/admin/login", "data": {"username": "admin", "password": "x"}},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_called_once()
+    assert json.loads(result) == {"status_code": 200, "body": "ok"}

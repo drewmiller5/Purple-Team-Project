@@ -1,6 +1,22 @@
 # red_agent/tools.py
 import json
 
+# K5: enforced recon-before-attack phase gate. Only one real target-facing
+# tool exists (http_request), so classification happens on the request
+# shape rather than a separate tool name: any state-changing POST, or any
+# GET carrying an injection-shaped payload (matching the same SQLi/command-
+# injection payload classes the seeded vulns use), counts as attack-class.
+# A plain GET with no such markers is recon-class and opens the gate.
+_ATTACK_INDICATORS = (
+    "'", "--", " or ", " and ", ";", "|", "&&", "`", "$(", "%0a", "%0d", "../", "union", "select",
+)
+# ponytail: substring matching (not word-boundary/regex), so a benign value
+# that happens to contain a marker (e.g. a path literally named
+# "/select-plan") is misclassified attack-class and blocked pre-recon.
+# Self-recovering (the agent just tries a different plain GET next), so left
+# as-is -- upgrade to a regex with word boundaries if false positives prove
+# disruptive in practice.
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -46,6 +62,15 @@ TOOL_SCHEMAS = [
 ]
 
 
+def _is_attack_class(method: str, path: str, params: dict | None, data: dict | None) -> bool:
+    if str(method).upper() != "GET":
+        return True
+    haystack = " ".join(
+        str(v) for v in [path, *(params or {}).values(), *(data or {}).values()]
+    ).lower()
+    return any(marker in haystack for marker in _ATTACK_INDICATORS)
+
+
 def dispatch_tool_call(call: dict, http, state) -> str:
     name = call["function"]["name"]
     args = call["function"].get("arguments", {})
@@ -58,12 +83,22 @@ def dispatch_tool_call(call: dict, http, state) -> str:
             path = args["path"]
         except KeyError as exc:
             return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
-        result = http.request(
-            method=method,
-            path=path,
-            params=args.get("params"),
-            data=args.get("data"),
-        )
+        params = args.get("params")
+        data = args.get("data")
+        is_attack = _is_attack_class(method, path, params, data)
+
+        if is_attack and not state.recon_done:
+            return json.dumps({
+                "error": (
+                    "phase gate: at least one recon-class request (a plain "
+                    "GET with no injection-shaped payload) is required "
+                    "before an attack-class request is permitted"
+                ),
+            })
+
+        result = http.request(method=method, path=path, params=params, data=data)
+        if not is_attack:
+            state.recon_done = True
         state.log_event({"phase": "http_request", "request": args, "response": result})
         return json.dumps(result)
 

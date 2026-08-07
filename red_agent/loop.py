@@ -68,6 +68,16 @@ def _stop_requested(referee_state_dir: str) -> bool:
     return (Path(referee_state_dir) / "stop.flag").exists()
 
 
+def _heartbeat_or_degrade(state) -> None:
+    """K1, mirroring blue_agent's guard: state.heartbeat() runs
+    unconditionally every iteration -- a disk-full/permission OSError must
+    degrade (skip that heartbeat), not kill the process."""
+    try:
+        state.heartbeat()
+    except OSError:
+        pass
+
+
 def run(config) -> None:
     state = RedAgentState(config)
     http = HttpTool(config.target_base_url)
@@ -99,6 +109,8 @@ def run(config) -> None:
     max_reasoning_turns = config.max_iterations * _REASONING_TURN_SOFT_CAP_MULTIPLIER
 
     while iteration_count < config.max_iterations and reasoning_turn_count < max_reasoning_turns:
+        _heartbeat_or_degrade(state)
+
         if _stop_requested(config.referee_state_dir):
             state.log_event({"phase": "round_stop_acknowledged"})
             return
