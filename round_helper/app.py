@@ -10,6 +10,15 @@ from flask import Flask, jsonify, request
 # builds or recreates anything.
 ALLOWED_CONTAINERS = ["purple-lab-referee", "purple-lab-red", "purple-lab-blue"]
 
+# block_ip (target/routes/internal.py) inserts iptables DROP rules on
+# target's INPUT/FORWARD chains with no expiry. target is never restarted
+# between rounds (only the 3 containers above are), and red keeps the same
+# IP across restarts on the same network, so a single successful block from
+# any past round silently pre-blocks red in every round since -- live-
+# confirmed. Flushed at the start of every round below so each round is an
+# independent trial; never touches red/blue/white_memory.json.
+TARGET_CONTAINER = "purple-lab-target"
+
 
 def create_app() -> Flask:
     app = Flask(__name__)
@@ -39,6 +48,20 @@ def create_app() -> Flask:
             client = docker.from_env()
             for name in ALLOWED_CONTAINERS:
                 client.containers.get(name).restart()
+
+            # See TARGET_CONTAINER comment above: reset block_ip's
+            # round-scoped network state so it doesn't silently carry over
+            # from a prior round. Fixed commands, no user input -- checked
+            # exit codes rather than assuming success (K3's lesson: a
+            # defensive action that claims success regardless of outcome is
+            # its own bug class).
+            target = client.containers.get(TARGET_CONTAINER)
+            for chain in ("INPUT", "FORWARD"):
+                result = target.exec_run(["iptables", "-F", chain])
+                if result.exit_code != 0:
+                    return jsonify({
+                        "error": f"iptables -F {chain} failed: {result.output!r}"
+                    }), 500
         except (docker.errors.DockerException, OSError) as exc:
             # Review-round fix: docker-py's per-request HTTP calls only wrap
             # requests.exceptions.HTTPError into a DockerException -- a raw
