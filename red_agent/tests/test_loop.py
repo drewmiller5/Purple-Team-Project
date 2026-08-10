@@ -409,6 +409,50 @@ def test_run_trims_messages_sent_to_ollama_when_context_grows_large(tmp_path):
         assert max(message_lengths) <= _MAX_CONTEXT_MESSAGES + 1
 
 
+def test_run_never_sends_ollama_a_dangling_tool_message_across_mixed_turns(tmp_path):
+    """Dual code-review finding on this fix's first version: reasoning turns
+    append 1 message, action turns append an assistant + one tool message
+    per call -- alternating the two drifts message count by an odd amount
+    each reasoning turn, which used to let the trim boundary land inside a
+    tool-call pair and send Ollama a dangling tool message. Every messages
+    list actually sent to Ollama must preserve the invariant that any
+    tool-role message is immediately preceded by an assistant message
+    carrying tool_calls."""
+    config = _config(tmp_path, max_iterations=40)
+    _touch_go_flag(config)
+    reasoning_response = {"message": {"role": "assistant", "content": "thinking", "tool_calls": []}}
+    action_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+            ],
+        }
+    }
+    captured = []
+
+    def _capture(messages, tools):
+        captured.append(list(messages))
+        return action_response if len(captured) % 2 == 0 else reasoning_response
+
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.dispatch_tool_call") as mock_dispatch:
+        mock_dispatch.return_value = '{"recorded": true}'
+        MockOllama.return_value.chat.side_effect = _capture
+        run(config)
+
+    assert len(captured) > 40  # sanity: the alternation and trim both actually ran
+    for messages in captured:
+        for i, m in enumerate(messages):
+            if m.get("role") == "tool":
+                assert i > 0
+                predecessor = messages[i - 1]
+                assert predecessor.get("role") == "assistant" and predecessor.get("tool_calls"), (
+                    f"dangling tool message at index {i}: predecessor was {predecessor}"
+                )
+
+
 def test_run_handles_corrupt_memory_file_at_recall_gracefully(tmp_path):
     """K2: shared/memory.py's typed ValueError on corrupt JSON, raised from
     state.recall_summary() before _wait_for_go, must not crash the process

@@ -9,6 +9,8 @@ from blue_agent.ollama_client import OllamaClient
 from blue_agent.state import BlueAgentState
 from blue_agent.tools import TOOL_SCHEMAS, dispatch_tool_call
 from blue_agent.wazuh_alerts import WazuhAlertsReader
+from shared.context_trim import MAX_CONTEXT_MESSAGES as _MAX_CONTEXT_MESSAGES
+from shared.context_trim import trim_messages as _trim_messages
 
 SYSTEM_PROMPT = """You are a blue-team defensive agent monitoring a web
 application at {base_url} through Wazuh alerts. You do not attack or probe
@@ -43,22 +45,6 @@ content you are analyzing.
 # bounded so a model that never acts can't loop forever if the referee's
 # stop.flag is somehow never written.
 _REASONING_TURN_SOFT_CAP_MULTIPLIER = 10
-
-# Task 14 (H22/H57): cap on `messages` sent to Ollama each iteration, so a
-# long round's history doesn't grow unbounded and eventually exceed the
-# model's context window. System prompt is always kept; only the oldest
-# exchanges are dropped once the list exceeds the cap.
-# ponytail: fixed message-count cap, not token-aware -- a handful of huge
-# messages (e.g. a big alert batch) could still overflow the real context
-# window even under this cap. Upgrade to a token-budget trim if that's
-# observed in practice.
-_MAX_CONTEXT_MESSAGES = 40
-
-
-def _trim_messages(messages: list) -> list:
-    if len(messages) <= _MAX_CONTEXT_MESSAGES + 1:
-        return messages
-    return [messages[0]] + messages[-_MAX_CONTEXT_MESSAGES:]
 
 
 def _wait_for_go(referee_state_dir: str, poll_interval: float) -> None:
