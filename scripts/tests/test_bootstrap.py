@@ -1,5 +1,8 @@
+import os
 import re
+import stat
 import subprocess
+from pathlib import Path
 
 import scripts.bootstrap as bootstrap
 from scripts.bootstrap import (
@@ -8,6 +11,7 @@ from scripts.bootstrap import (
     extract_bcrypt_hash,
     generate_complex_password,
     generate_hex_secret,
+    generate_wazuh_hash,
     render_env_file,
     update_internal_users_hashes,
 )
@@ -101,6 +105,40 @@ def test_update_internal_users_hashes_only_touches_admin_and_kibanaserver():
     assert "OLDKIBANAHASH" not in result
 
 
+def test_update_internal_users_hashes_raises_if_a_section_never_matched():
+    # admin's hash line uses single quotes -- doesn't match the expected
+    # `hash: "..."` shape, so the replacement silently never fires.
+    yml = (
+        "admin:\n"
+        "  hash: 'not-the-expected-format'\n"
+        "  reserved: true\n"
+        "\n"
+        "kibanaserver:\n"
+        '  hash: "$2y$12$OLDKIBANAHASH"\n'
+        "  reserved: true\n"
+    )
+
+    try:
+        update_internal_users_hashes(
+            yml, admin_hash="$2y$12$NEWADMIN", kibanaserver_hash="$2y$12$NEWKIBANA"
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "admin" in str(exc)
+
+
+def test_update_internal_users_hashes_raises_if_section_missing_entirely():
+    yml = 'kibanaserver:\n  hash: "$2y$12$OLDKIBANAHASH"\n'
+
+    try:
+        update_internal_users_hashes(
+            yml, admin_hash="$2y$12$NEWADMIN", kibanaserver_hash="$2y$12$NEWKIBANA"
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "admin" in str(exc)
+
+
 def test_build_credentials_block_includes_every_surface():
     env = {
         "DASHBOARD_AUTH_TOKEN": "dashtoken123",
@@ -122,6 +160,72 @@ def test_build_credentials_block_includes_every_surface():
     # across Docker Desktop engine restarts and unneeded by the experiment.
     assert "9200" not in block
     assert "55000" not in block
+
+
+def test_write_owner_only_writes_content_with_no_write_then_chmod_window(tmp_path):
+    # Must create the file already-restricted (os.open with mode=0o600), not
+    # write_text() followed by a separate chmod call -- the latter leaves a
+    # window where the plaintext-secrets file briefly has default (wider)
+    # permissions. Real enforcement only applies on POSIX; Windows has no
+    # equivalent to owner/group/other bits.
+    path = tmp_path / "secret.txt"
+
+    bootstrap._write_owner_only(path, "hello")
+
+    assert path.read_text(encoding="utf-8") == "hello"
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_write_owner_only_re_narrows_permissions_on_a_pre_existing_wider_file(tmp_path):
+    # os.open()'s mode argument is only applied when O_CREAT actually
+    # creates the file -- POSIX ignores it if the path already exists, so
+    # a stale, wider-than-0o600 file (e.g. left by a pre-patch version of
+    # this script) would otherwise never get re-narrowed on a later run.
+    path = tmp_path / "secret.txt"
+    path.write_text("old", encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(path, 0o644)
+
+    bootstrap._write_owner_only(path, "new")
+
+    assert path.read_text(encoding="utf-8") == "new"
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_bootstrap_env_restricts_permissions_on_the_idempotent_path_too(tmp_path, monkeypatch):
+    # A pre-existing .env (hand-copied, or created by an older pre-patch
+    # version of this script) must also get hardened, not just first-generation.
+    env_path = tmp_path / ".env"
+    env_path.write_text("INTERNAL_ACTION_TOKEN=existing-value\n", encoding="utf-8")
+    monkeypatch.setattr(bootstrap, "ENV_PATH", env_path)
+
+    bootstrap.bootstrap_env(run=lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not shell out")))
+
+    if os.name == "posix":
+        assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_generate_wazuh_hash_redacts_password_on_docker_failure():
+    password = "SuperSecretPW123!"
+
+    def failing_run(argv, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd=argv, output="", stderr="boom")
+
+    try:
+        generate_wazuh_hash(password, run=failing_run)
+        assert False, "expected an exception"
+    except Exception as exc:
+        assert password not in str(exc)
+        assert password not in repr(exc)
+        assert exc.__cause__ is None  # not chained -- avoids leaking argv via traceback
+        # `from None` only suppresses *display* of the original exception;
+        # __context__ stays populated unless the raise happens outside the
+        # except block entirely. Any code walking the exception chain
+        # programmatically (not just the default traceback formatter) must
+        # not be able to recover the plaintext-password-bearing original.
+        assert exc.__context__ is None
 
 
 def test_bootstrap_env_is_idempotent_when_env_already_exists(tmp_path, monkeypatch):

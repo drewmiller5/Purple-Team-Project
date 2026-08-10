@@ -6,6 +6,7 @@ credentials block. See work/school/Purple Team Project.md's 2026-08-04
 in-app login banner (purple_dashboard's HTTP Basic Auth intercepts before any
 custom HTML can render).
 """
+import os
 import re
 import secrets
 import string
@@ -80,21 +81,45 @@ def extract_bcrypt_hash(text: str) -> str:
 
 
 def generate_wazuh_hash(password: str, run=subprocess.run) -> str:
-    result = run(
-        [
-            "docker", "run", "--rm",
-            "-e", "JAVA_HOME=/usr/share/wazuh-indexer/jdk",
-            "--entrypoint", "/usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh",
-            WAZUH_INDEXER_IMAGE,
-            "-p", password,
-        ],
-        capture_output=True, text=True, check=True,
-    )
+    # The password is passed as an argv literal (hash.sh -p <password>) --
+    # stdin-piping isn't a verified-safe alternative for this specific tool,
+    # so instead we make sure a failure can't leak it back out: catch here
+    # and raise a redacted error instead of letting the original exception
+    # (whose str() includes the full argv, password included) surface raw.
+    # SubprocessError (not just CalledProcessError) so a future timeout=
+    # addition -- TimeoutExpired also embeds argv -- stays covered too.
+    # The redacted RuntimeError is raised *outside* this except block on
+    # purpose: `raise ... from None` only suppresses the original exception
+    # from *display*, it doesn't clear __context__ -- a raise still
+    # lexically inside the except block leaves the password-bearing
+    # original reachable via exc.__context__ to anything that walks the
+    # exception chain programmatically, not just the default traceback
+    # formatter.
+    hash_failed = False
+    try:
+        result = run(
+            [
+                "docker", "run", "--rm",
+                "-e", "JAVA_HOME=/usr/share/wazuh-indexer/jdk",
+                "--entrypoint", "/usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh",
+                WAZUH_INDEXER_IMAGE,
+                "-p", password,
+            ],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.SubprocessError:
+        hash_failed = True
+    if hash_failed:
+        raise RuntimeError(
+            "hash.sh failed while generating a Wazuh credential hash "
+            "(command and output redacted to avoid leaking the plaintext password)"
+        )
     return extract_bcrypt_hash(result.stdout)
 
 
 def update_internal_users_hashes(yml_text: str, admin_hash: str, kibanaserver_hash: str) -> str:
     hashes = {"admin": admin_hash, "kibanaserver": kibanaserver_hash}
+    counts = {name: 0 for name in hashes}
     section = None
     out = []
     for line in yml_text.splitlines(keepends=True):
@@ -107,8 +132,16 @@ def update_internal_users_hashes(yml_text: str, admin_hash: str, kibanaserver_ha
             indent = line[: len(line) - len(line.lstrip())]
             newline = "\n" if line.endswith("\n") else ""
             out.append(f'{indent}hash: "{hashes[section]}"{newline}')
+            counts[section] += 1
             continue
         out.append(line)
+    for name, count in counts.items():
+        if count != 1:
+            raise ValueError(
+                f"expected exactly one hash replacement in the '{name}' section of "
+                f"internal_users.yml, found {count} -- .env's rotated password would "
+                f"be out of sync with the actual bcrypt hash"
+            )
     return "".join(out)
 
 
@@ -134,6 +167,24 @@ Wazuh Dashboard (SIEM UI -- browser will warn on the self-signed cert)
 """
 
 
+def _write_owner_only(path: Path, text: str) -> None:
+    # os.open's mode is applied atomically at creation, unlike write_text()
+    # followed by a separate chmod call, which leaves a brief window where
+    # the plaintext-secrets file has the default (wider) permissions.
+    # Real restriction only applies on POSIX -- Windows has no equivalent
+    # to owner/group/other bits, so this (and any chmod call) is a no-op
+    # there; callers are responsible for warning the user on that platform.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    # os.open's mode is only applied when O_CREAT actually creates the file
+    # -- POSIX ignores it if path already existed, so a stale wider-than-
+    # 0o600 file (e.g. from a pre-patch version of this script) would
+    # otherwise never get re-narrowed on a later run.
+    if os.name == "posix":
+        os.chmod(path, 0o600)
+
+
 def _parse_env(text: str) -> dict:
     values = {}
     for line in text.splitlines():
@@ -145,7 +196,18 @@ def _parse_env(text: str) -> dict:
 
 def bootstrap_env(run=subprocess.run) -> dict:
     if ENV_PATH.exists():
+        # Hardens a pre-existing .env too (hand-copied, or created by an
+        # older pre-patch version of this script) -- not just first-generation.
+        if os.name == "posix":
+            os.chmod(ENV_PATH, 0o600)
         return _parse_env(ENV_PATH.read_text(encoding="utf-8"))
+
+    if os.name != "posix":
+        print(
+            f"warning: file permissions are not enforced on this platform -- "
+            f"{ENV_PATH} and {QUICKSTART_PATH} will contain plaintext secrets "
+            "readable by any local account with filesystem access"
+        )
 
     values = {
         "INTERNAL_ACTION_TOKEN": generate_hex_secret(),
@@ -163,7 +225,7 @@ def bootstrap_env(run=subprocess.run) -> dict:
     INTERNAL_USERS_PATH.write_text(updated_yml, encoding="utf-8")
 
     env_text = render_env_file(ENV_EXAMPLE_PATH.read_text(encoding="utf-8"), values)
-    ENV_PATH.write_text(env_text, encoding="utf-8")
+    _write_owner_only(ENV_PATH, env_text)
 
     return values
 
@@ -176,7 +238,7 @@ def main() -> int:
 
     block = build_credentials_block(env)
     print("\n" + block)
-    QUICKSTART_PATH.write_text(block, encoding="utf-8")
+    _write_owner_only(QUICKSTART_PATH, block)
     print(f"Also saved to {QUICKSTART_PATH}")
     return 0
 
