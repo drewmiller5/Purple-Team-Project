@@ -97,6 +97,38 @@ def test_redact_params_redacts_nested_dict_values():
     assert redacted["credentials"]["note"] == "keep"
 
 
+def test_redact_params_redacts_a_sensitive_named_key_even_when_its_value_is_a_dict():
+    params = {
+        "username": "admin",
+        "password_data": {"old": "hunter2", "new": "hunter3"},
+    }
+
+    redacted = _redact_params(params)
+
+    assert redacted["username"] == "admin"
+    assert redacted["password_data"] == "[REDACTED]"
+
+
+def test_redact_params_redacts_secret_shaped_keys():
+    params = {"username": "admin", "client_secret": "abc123"}
+
+    redacted = _redact_params(params)
+
+    assert redacted["client_secret"] == "[REDACTED]"
+
+
+def test_redact_params_redacts_dicts_nested_inside_a_list():
+    params = {
+        "username": "admin",
+        "credentials": [{"password": "hunter2"}, {"password": "hunter3"}],
+    }
+
+    redacted = _redact_params(params)
+
+    assert redacted["credentials"][0]["password"] == "[REDACTED]"
+    assert redacted["credentials"][1]["password"] == "[REDACTED]"
+
+
 def test_user_id_logged_from_active_session(tmp_path):
     log_path = tmp_path / "requests.jsonl"
     client = _make_app(log_path).test_client()

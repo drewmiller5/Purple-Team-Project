@@ -20,17 +20,29 @@ DEFAULT_LOG_PATH = "target/logs/requests.jsonl"
 _log_write_lock = threading.Lock()
 
 # Substring match (not exact) so this also catches confirm_password,
-# access_token, etc -- matches this codebase's own secret-naming
-# convention (see scripts/bootstrap.py's GENERATED_KEYS: *_TOKEN/*_PASSWORD).
-_SENSITIVE_KEY_SUBSTRINGS = ("password", "token")
+# access_token, client_secret, etc -- matches this codebase's own
+# secret-naming convention (see scripts/bootstrap.py's GENERATED_KEYS:
+# *_TOKEN/*_PASSWORD) plus "secret" per the Phase 1 hunt's own
+# recommendation (docs/ledger/plans/2026-07-28-plan-3c-hunt-results/
+# code-review-target.md).
+_SENSITIVE_KEY_SUBSTRINGS = ("password", "token", "secret")
 
 
 def _redact_params(params: dict) -> dict:
     def _redact_value(key, value):
-        if isinstance(value, dict):
-            return _redact_params(value)
+        # Check the key itself first -- a sensitive-named key (e.g.
+        # "password_data") must be redacted wholesale even when its value
+        # is a dict/list, not recursed into (recursing would only redact
+        # matching sub-keys and leak everything else under it).
         if any(s in key.lower() for s in _SENSITIVE_KEY_SUBSTRINGS):
             return "[REDACTED]"
+        if isinstance(value, dict):
+            return _redact_params(value)
+        if isinstance(value, list):
+            return [
+                _redact_params(item) if isinstance(item, dict) else item
+                for item in value
+            ]
         return value
 
     return {key: _redact_value(key, value) for key, value in params.items()}
