@@ -11,15 +11,29 @@ DEFAULT_LOG_PATH = "target/logs/requests.jsonl"
 # Module-level lock serializing writes to the log file across concurrent
 # requests (Flask's dev/threaded server can handle requests on multiple
 # threads simultaneously; without this, interleaved writes could corrupt
-# or merge JSON lines).
+# or merge JSON lines). Thread-safe only, not process-safe -- fine for the
+# current single-process dev server, but a future move to a multi-worker
+# WSGI server would need a real cross-process lock (e.g.
+# multiprocessing.Lock or a file lock) to keep requests.jsonl from getting
+# interleaved/corrupted, which would also break Wazuh's JSON-decoder
+# pipeline downstream (H62).
 _log_write_lock = threading.Lock()
+
+# Substring match (not exact) so this also catches confirm_password,
+# access_token, etc -- matches this codebase's own secret-naming
+# convention (see scripts/bootstrap.py's GENERATED_KEYS: *_TOKEN/*_PASSWORD).
+_SENSITIVE_KEY_SUBSTRINGS = ("password", "token")
 
 
 def _redact_params(params: dict) -> dict:
-    return {
-        key: ("[REDACTED]" if key.lower() == "password" else value)
-        for key, value in params.items()
-    }
+    def _redact_value(key, value):
+        if isinstance(value, dict):
+            return _redact_params(value)
+        if any(s in key.lower() for s in _SENSITIVE_KEY_SUBSTRINGS):
+            return "[REDACTED]"
+        return value
+
+    return {key: _redact_value(key, value) for key, value in params.items()}
 
 
 def register_logging(app, log_path: str = None):

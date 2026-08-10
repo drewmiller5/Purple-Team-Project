@@ -2,7 +2,7 @@ import json
 
 from flask import Flask, session
 
-from target.logging_middleware import register_logging
+from target.logging_middleware import _redact_params, register_logging
 
 
 def _make_app(log_path):
@@ -63,6 +63,38 @@ def test_password_param_is_redacted(tmp_path):
     entry = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert entry["form_params"]["password"] == "[REDACTED]"
     assert entry["form_params"]["username"] == "admin"
+
+
+def test_confirm_password_and_token_shaped_keys_are_redacted(tmp_path):
+    log_path = tmp_path / "requests.jsonl"
+    client = _make_app(log_path).test_client()
+
+    client.post(
+        "/login",
+        data={
+            "username": "admin",
+            "confirm_password": "admin123",
+            "access_token": "abc123",
+        },
+    )
+
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert entry["form_params"]["confirm_password"] == "[REDACTED]"
+    assert entry["form_params"]["access_token"] == "[REDACTED]"
+    assert entry["form_params"]["username"] == "admin"
+
+
+def test_redact_params_redacts_nested_dict_values():
+    params = {
+        "username": "admin",
+        "credentials": {"password": "admin123", "note": "keep"},
+    }
+
+    redacted = _redact_params(params)
+
+    assert redacted["username"] == "admin"
+    assert redacted["credentials"]["password"] == "[REDACTED]"
+    assert redacted["credentials"]["note"] == "keep"
 
 
 def test_user_id_logged_from_active_session(tmp_path):
