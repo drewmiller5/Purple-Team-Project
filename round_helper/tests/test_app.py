@@ -10,7 +10,7 @@ VALID_TOKEN = "test-token-123"
 
 def _client():
     app = create_app()
-    app.config["INTERNAL_ACTION_TOKEN"] = VALID_TOKEN
+    app.config["ROUND_HELPER_TOKEN"] = VALID_TOKEN
     return app.test_client()
 
 
@@ -153,6 +153,37 @@ def test_start_round_returns_401_on_wrong_token():
     assert response.status_code == 401
     assert "error" in response.get_json()
     mock_from_env.assert_not_called()
+
+
+def test_start_round_rejects_the_old_shared_internal_action_token():
+    """H54: round_helper must have its own dedicated secret, distinct from
+    target's INTERNAL_ACTION_TOKEN -- so a token leaked via target's RCE
+    can no longer reach round_helper's container-restart control plane
+    even if the network topology ever changes. A caller authenticating
+    with the old shared-token value (what target's own auth accepts) must
+    be rejected here."""
+    client = _client()
+    with patch("round_helper.app.docker.from_env") as mock_from_env:
+        response = client.post(
+            "/start-round",
+            headers={"X-Internal-Action-Token": "old-shared-internal-action-token-value"},
+        )
+
+    assert response.status_code == 401
+    mock_from_env.assert_not_called()
+
+
+def test_start_round_accepts_the_dedicated_round_helper_token():
+    client = _client()
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value.exec_run.return_value = MagicMock(exit_code=0, output=b"")
+    with patch("round_helper.app.docker.from_env", return_value=mock_docker_client):
+        response = client.post(
+            "/start-round",
+            headers={"X-Internal-Action-Token": VALID_TOKEN},
+        )
+
+    assert response.status_code == 200
 
 
 def test_no_other_routes_exist():

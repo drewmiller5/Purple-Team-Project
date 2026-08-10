@@ -68,6 +68,9 @@ def create_app() -> Flask:
     app.config["REFEREE_STATE_DIR"] = os.environ.get("REFEREE_STATE_DIR", "/app/referee_state")
     app.config["TARGET_BASE_URL"] = os.environ.get("TARGET_BASE_URL", "http://target:5000")
     app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")
+    # H54: round_helper's own dedicated secret, distinct from
+    # INTERNAL_ACTION_TOKEN (used above for target's /internal/* routes).
+    app.config["ROUND_HELPER_TOKEN"] = os.environ.get("ROUND_HELPER_TOKEN")
     app.config["ROUND_HELPER_URL"] = os.environ.get("ROUND_HELPER_URL", "http://round_helper:8090")
     app.config["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434")
     app.config["OLLAMA_MODEL"] = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
@@ -139,7 +142,7 @@ def create_app() -> Flask:
 
     @app.route("/api/round/start", methods=["POST"])
     def round_start():
-        return jsonify(start_round(app.config["ROUND_HELPER_URL"], app.config["INTERNAL_ACTION_TOKEN"]))
+        return jsonify(start_round(app.config["ROUND_HELPER_URL"], app.config["ROUND_HELPER_TOKEN"]))
 
     @app.route("/api/red-action", methods=["POST"])
     def red_action():

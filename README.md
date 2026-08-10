@@ -37,9 +37,12 @@ re-run -- it never touches an `.env` that already exists.
 
 Requires `INTERNAL_ACTION_TOKEN` set (shared secret authenticating `target`'s
 internal defensive endpoints against `blue_agent` and Wazuh's active-response
-scripts; no default, the stack fails closed without it) and
-`DASHBOARD_AUTH_TOKEN` set (password for the dashboard's HTTP Basic Auth,
-username hardcoded as `operator`; also no default). Copy `.env.example` to
+scripts; no default, the stack fails closed without it), `ROUND_HELPER_TOKEN`
+set (round_helper's own dedicated secret for its docker.sock-backed
+container-restart control plane, distinct from `INTERNAL_ACTION_TOKEN`; also
+no default), and `DASHBOARD_AUTH_TOKEN` set (password for the dashboard's
+HTTP Basic Auth, username hardcoded as `operator`; also no default). Copy
+`.env.example` to
 `.env` and fill in random values, or export them directly:
 
     cp .env.example .env   # then edit .env

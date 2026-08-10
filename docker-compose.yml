@@ -221,6 +221,7 @@ services:
       - REFEREE_STATE_DIR=/app/referee_state
       - TARGET_BASE_URL=http://target:5000
       - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
+      - ROUND_HELPER_TOKEN=${ROUND_HELPER_TOKEN:?set ROUND_HELPER_TOKEN before starting the lab}
       - DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:?set DASHBOARD_AUTH_TOKEN before starting the lab}
       - ROUND_HELPER_URL=http://round_helper:8090
       - OLLAMA_HOST=http://host.docker.internal:11434
@@ -244,12 +245,15 @@ services:
       # :ro only protects the socket *file* on this mount point -- it does
       # not narrow the Docker Engine API reachable over it (still full
       # root-equivalent). The actual scoping is app-level: app.py's
-      # hardcoded ALLOWED_CONTAINERS allowlist + INTERNAL_ACTION_TOKEN auth,
+      # hardcoded ALLOWED_CONTAINERS allowlist + ROUND_HELPER_TOKEN auth
+      # (H54: its own dedicated secret, not target's INTERNAL_ACTION_TOKEN),
       # never :ro.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - COMPOSE_PROJECT_DIR=/app
-      - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
+      # H54: dedicated secret, distinct from target's INTERNAL_ACTION_TOKEN
+      # -- see the agent-net INVARIANT comment below for why this matters.
+      - ROUND_HELPER_TOKEN=${ROUND_HELPER_TOKEN:?set ROUND_HELPER_TOKEN before starting the lab}
 
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.2
@@ -616,13 +620,12 @@ networks:
     # guarantee verified for lab-net.
     #
     # INVARIANT: `target` must never be added to agent-net (or otherwise
-    # bridged to round_helper). INTERNAL_ACTION_TOKEN is shared between
-    # target's internal routes and round_helper's container-restart control
-    # plane, and target is considered compromised-by-design (it's the
-    # deliberately RCE-able host) — this network segmentation is the only
-    # thing preventing a stolen copy of that token from reaching
-    # round_helper. Splitting the token into two separate secrets is
-    # deferred to before-public-release, not fixed here.
+    # bridged to round_helper). target is considered compromised-by-design
+    # (it's the deliberately RCE-able host), so even with round_helper now
+    # on its own dedicated ROUND_HELPER_TOKEN (H54, distinct from
+    # target's INTERNAL_ACTION_TOKEN) network segmentation stays the primary
+    # control -- defense-in-depth, not a reason to relax it now that the
+    # token split has landed.
 
 volumes:
   target-logs:

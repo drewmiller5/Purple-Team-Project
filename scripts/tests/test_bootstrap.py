@@ -162,6 +162,23 @@ def test_build_credentials_block_includes_every_surface():
     assert "55000" not in block
 
 
+def test_generated_keys_cover_every_blank_key_in_the_real_env_example():
+    """Regression test: GENERATED_KEYS drifted out of sync with
+    .env.example when ROUND_HELPER_TOKEN was added elsewhere (H54) --
+    render_env_file only fills a line whose key is in GENERATED_KEYS, so a
+    fresh clone's quickstart silently left ROUND_HELPER_TOKEN blank and
+    docker compose then refused to start. Every blank `KEY=` line in the
+    real .env.example must be covered by GENERATED_KEYS."""
+    text = bootstrap.ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+    blank_keys = {
+        match.group(1)
+        for line in text.splitlines()
+        for match in [re.fullmatch(r"([A-Z_]+)=", line)]
+        if match
+    }
+    assert blank_keys == set(GENERATED_KEYS)
+
+
 def test_write_owner_only_writes_content_with_no_write_then_chmod_window(tmp_path):
     # Must create the file already-restricted (os.open with mode=0o600), not
     # write_text() followed by a separate chmod call -- the latter leaves a

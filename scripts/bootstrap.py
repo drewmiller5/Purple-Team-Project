@@ -27,6 +27,7 @@ COMPLEX_PASSWORD_SPECIALS = "@$!%*?&-_"
 # "no default, refuses to start without it" comment in .env.example.
 GENERATED_KEYS = (
     "INTERNAL_ACTION_TOKEN",
+    "ROUND_HELPER_TOKEN",
     "DASHBOARD_AUTH_TOKEN",
     "WAZUH_INDEXER_PASSWORD",
     "WAZUH_DASHBOARD_PASSWORD",
@@ -211,6 +212,7 @@ def bootstrap_env(run=subprocess.run) -> dict:
 
     values = {
         "INTERNAL_ACTION_TOKEN": generate_hex_secret(),
+        "ROUND_HELPER_TOKEN": generate_hex_secret(),
         "DASHBOARD_AUTH_TOKEN": generate_hex_secret(),
         "WAZUH_INDEXER_PASSWORD": generate_hex_secret(24),
         "WAZUH_DASHBOARD_PASSWORD": generate_hex_secret(24),

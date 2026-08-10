@@ -21,6 +21,11 @@ RED_TEMPLATES = {
     },
 }
 
+# H55: scope raw mode's blast radius -- a leaked DASHBOARD_AUTH_TOKEN
+# previously granted unrestricted method/path passthrough against target.
+# Mirrors red_agent's own http_request enforcement (H64).
+_ALLOWED_RAW_METHODS = ("GET", "POST")
+
 BLUE_ACTION_ENDPOINTS = {
     "lock_account": ("/internal/lock-account", "username"),
     "kill_session": ("/internal/kill-session", "user_id"),
@@ -59,6 +64,10 @@ def run_red_action(target_base_url: str, template_name: str = None, raw: dict = 
         method, path = raw.get("method"), raw.get("path")
         if not method or not path:
             return {"error": "raw must include method and path"}
+        if str(method).upper() not in _ALLOWED_RAW_METHODS:
+            return {"error": f"unsupported method {method!r}; only GET/POST are allowed"}
+        if not path.startswith("/") or "://" in path:
+            return {"error": f"path must be a relative path starting with '/': {path!r}"}
         params, data = raw.get("params"), raw.get("data")
     else:
         return {"error": "template_name or raw is required"}

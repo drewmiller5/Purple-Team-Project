@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import responses
@@ -58,6 +59,39 @@ def test_run_red_action_raw_request_hits_given_method_and_path(tmp_path):
 
 def test_run_red_action_requires_template_or_raw(tmp_path):
     result = run_red_action("http://target:5000", event_log_path=str(tmp_path / "events.jsonl"))
+    assert "error" in result
+
+
+def test_run_red_action_raw_rejects_method_outside_allowlist(tmp_path):
+    """H55: raw mode's method/path were unrestricted passthrough -- a single
+    leaked DASHBOARD_AUTH_TOKEN granted arbitrary-method requests against
+    target. Must be allow-listed like red_agent's own http_request tool
+    (H64). Patches _do_request (not just checking for an "error" key) so
+    this actually proves the request never goes out, rather than passing
+    vacuously because there's no live target to connect to."""
+    with patch("dashboard.actions._do_request") as mock_do_request:
+        result = run_red_action(
+            "http://target:5000",
+            raw={"method": "DELETE", "path": "/admin/users/1"},
+            event_log_path=str(tmp_path / "events.jsonl"),
+        )
+
+    mock_do_request.assert_not_called()
+    assert "error" in result
+
+
+def test_run_red_action_raw_rejects_a_non_relative_path(tmp_path):
+    """H55: path must stay a relative path under target's own base URL, not
+    an absolute-URL-shaped string that could be misread by a future
+    _do_request refactor."""
+    with patch("dashboard.actions._do_request") as mock_do_request:
+        result = run_red_action(
+            "http://target:5000",
+            raw={"method": "GET", "path": "http://evil.example/steal"},
+            event_log_path=str(tmp_path / "events.jsonl"),
+        )
+
+    mock_do_request.assert_not_called()
     assert "error" in result
 
 

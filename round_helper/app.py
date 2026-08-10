@@ -22,11 +22,15 @@ TARGET_CONTAINER = "purple-lab-target"
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    app.config["INTERNAL_ACTION_TOKEN"] = os.environ.get("INTERNAL_ACTION_TOKEN")
+    # H54: dedicated secret, distinct from target's INTERNAL_ACTION_TOKEN --
+    # target is considered compromised-by-design (deliberately RCE-able), so
+    # a stolen copy of its token must not also unlock this container-restart
+    # control plane.
+    app.config["ROUND_HELPER_TOKEN"] = os.environ.get("ROUND_HELPER_TOKEN")
 
     @app.route("/start-round", methods=["POST"])
     def start_round():
-        expected_token = app.config.get("INTERNAL_ACTION_TOKEN")
+        expected_token = app.config.get("ROUND_HELPER_TOKEN")
         supplied_token = request.headers.get("X-Internal-Action-Token")
 
         if not (expected_token and supplied_token and hmac.compare_digest(expected_token, supplied_token)):

@@ -14,6 +14,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("REFEREE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("TARGET_BASE_URL", "http://target:5000")
     monkeypatch.setenv("INTERNAL_ACTION_TOKEN", "secret-token")
+    monkeypatch.setenv("ROUND_HELPER_TOKEN", "round-helper-secret")
     monkeypatch.setenv("ROUND_HELPER_URL", "http://round_helper:8090")
     monkeypatch.setenv("OLLAMA_HOST", "http://ollama:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
@@ -130,7 +131,10 @@ def test_round_start_endpoint_calls_round_helper(app):
         response = app.test_client().post("/api/round/start", auth=AUTH)
 
     assert response.status_code == 200
-    mock_start.assert_called_once_with("http://round_helper:8090", "secret-token")
+    # H54: round_helper gets its own dedicated token, not target's
+    # INTERNAL_ACTION_TOKEN -- a token leaked via target's RCE must not
+    # reach round_helper's container-restart control plane.
+    mock_start.assert_called_once_with("http://round_helper:8090", "round-helper-secret")
 
 
 def test_red_action_endpoint_delegates_to_run_red_action(app):
