@@ -7,7 +7,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     for var in (
         "TARGET_BASE_URL", "OLLAMA_HOST", "OLLAMA_MODEL",
         "RED_MEMORY_PATH", "EVENT_LOG_PATH", "RED_MAX_ITERATIONS",
-        "REFEREE_STATE_DIR",
+        "REFEREE_STATE_DIR", "MEMORY_ENABLED",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -20,6 +20,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     assert config.event_log_path == "shared_logs/events.jsonl"
     assert config.max_iterations == 50
     assert config.referee_state_dir == "/app/referee_state"
+    assert config.memory_enabled is True
 
 
 def test_load_config_reads_env_overrides(monkeypatch):
@@ -30,3 +31,9 @@ def test_load_config_reads_env_overrides(monkeypatch):
 
     assert config.ollama_model == "llama3.2:3b"
     assert config.max_iterations == 10
+
+
+def test_load_config_memory_enabled_false_when_env_says_so(monkeypatch):
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
+    config = load_config()
+    assert config.memory_enabled is False

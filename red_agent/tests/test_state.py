@@ -6,7 +6,7 @@ from shared.event_log import read_events
 from shared.memory import load_memory
 
 
-def _config(tmp_path):
+def _config(tmp_path, memory_enabled=True):
     return RedAgentConfig(
         target_base_url="http://target:5000",
         ollama_host="http://host.docker.internal:11434",
@@ -15,6 +15,7 @@ def _config(tmp_path):
         event_log_path=str(tmp_path / "events.jsonl"),
         max_iterations=5,
         referee_state_dir=str(tmp_path / "referee_state"),
+        memory_enabled=memory_enabled,
     )
 
 
@@ -66,6 +67,17 @@ def test_heartbeat_logs_a_heartbeat_phase_event(tmp_path):
     assert len(events) == 1
     assert events[0]["side"] == "red"
     assert events[0]["phase"] == "heartbeat"
+
+
+def test_recall_summary_empty_when_memory_disabled_even_with_entries(tmp_path):
+    """Memory on/off toggle: MEMORY_ENABLED=false must blank out recall
+    without touching red_memory.json -- record_finding still writes it."""
+    state = RedAgentState(_config(tmp_path, memory_enabled=False))
+    state.record_finding("sqli", "/search?q= is injectable", True)
+
+    assert state.recall_summary() == ""
+    memory = load_memory(str(tmp_path / "red_memory.json"))
+    assert len(memory["entries"]) == 1
 
 
 def test_recon_done_defaults_to_false(tmp_path):

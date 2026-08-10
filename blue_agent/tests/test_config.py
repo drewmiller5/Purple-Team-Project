@@ -5,7 +5,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     for var in (
         "TARGET_BASE_URL", "OLLAMA_HOST", "OLLAMA_MODEL", "BLUE_MEMORY_PATH",
         "EVENT_LOG_PATH", "WAZUH_ALERTS_PATH", "REFEREE_STATE_DIR",
-        "BLUE_MAX_ITERATIONS", "BLUE_POLL_INTERVAL_SECONDS",
+        "BLUE_MAX_ITERATIONS", "BLUE_POLL_INTERVAL_SECONDS", "MEMORY_ENABLED",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -20,6 +20,7 @@ def test_load_config_uses_defaults_when_env_unset(monkeypatch):
     assert config.referee_state_dir == "/app/referee_state"
     assert config.max_iterations == 200
     assert config.poll_interval_seconds == 5.0
+    assert config.memory_enabled is True
 
 
 def test_load_config_reads_env_overrides(monkeypatch):
@@ -32,3 +33,9 @@ def test_load_config_reads_env_overrides(monkeypatch):
     assert config.ollama_model == "llama3.2:3b"
     assert config.max_iterations == 10
     assert config.poll_interval_seconds == 1.5
+
+
+def test_load_config_memory_enabled_false_when_env_says_so(monkeypatch):
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
+    config = load_config()
+    assert config.memory_enabled is False

@@ -11,6 +11,7 @@ class RedAgentConfig:
     event_log_path: str
     max_iterations: int
     referee_state_dir: str
+    memory_enabled: bool = True
 
 
 def load_config() -> RedAgentConfig:
@@ -22,4 +23,8 @@ def load_config() -> RedAgentConfig:
         event_log_path=os.environ.get("EVENT_LOG_PATH", "shared_logs/events.jsonl"),
         max_iterations=int(os.environ.get("RED_MAX_ITERATIONS", "50")),
         referee_state_dir=os.environ.get("REFEREE_STATE_DIR", "/app/referee_state"),
+        # Memory on/off toggle: gates recall only (state.py's recall_summary),
+        # never the underlying red_memory.json writes -- comparison/demo
+        # feature, not a data-retention control.
+        memory_enabled=os.environ.get("MEMORY_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off"),
     )

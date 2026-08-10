@@ -6,7 +6,7 @@ from shared.event_log import read_events
 from shared.memory import load_memory
 
 
-def _config(tmp_path):
+def _config(tmp_path, memory_enabled=True):
     return BlueAgentConfig(
         target_base_url="http://target:5000",
         ollama_host="http://host.docker.internal:11434",
@@ -17,6 +17,7 @@ def _config(tmp_path):
         referee_state_dir=str(tmp_path / "referee_state"),
         max_iterations=5,
         poll_interval_seconds=0.0,
+        memory_enabled=memory_enabled,
     )
 
 
@@ -66,6 +67,17 @@ def test_recall_summary_lists_recorded_findings(tmp_path):
     summary = state.recall_summary()
     assert "escalation" in summary
     assert "hold" in summary
+
+
+def test_recall_summary_empty_when_memory_disabled_even_with_entries(tmp_path):
+    """Memory on/off toggle: MEMORY_ENABLED=false must blank out recall
+    without touching blue_memory.json -- record_finding still writes it."""
+    state = BlueAgentState(_config(tmp_path, memory_enabled=False))
+    state.record_finding("escalation", "locked admin after bruteforce alert", True)
+
+    assert state.recall_summary() == ""
+    memory = load_memory(str(tmp_path / "blue_memory.json"))
+    assert len(memory["entries"]) == 1
 
 
 def test_log_event_survives_oserror_from_underlying_write(tmp_path):

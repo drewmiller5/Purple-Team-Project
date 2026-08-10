@@ -13,6 +13,7 @@ class BlueAgentConfig:
     referee_state_dir: str
     max_iterations: int
     poll_interval_seconds: float
+    memory_enabled: bool = True
 
 
 def load_config() -> BlueAgentConfig:
@@ -26,4 +27,8 @@ def load_config() -> BlueAgentConfig:
         referee_state_dir=os.environ.get("REFEREE_STATE_DIR", "/app/referee_state"),
         max_iterations=int(os.environ.get("BLUE_MAX_ITERATIONS", "200")),
         poll_interval_seconds=float(os.environ.get("BLUE_POLL_INTERVAL_SECONDS", "5.0")),
+        # Memory on/off toggle: gates recall only (state.py's recall_summary),
+        # never the underlying blue_memory.json writes -- comparison/demo
+        # feature, not a data-retention control.
+        memory_enabled=os.environ.get("MEMORY_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off"),
     )

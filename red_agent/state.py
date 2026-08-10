@@ -31,6 +31,8 @@ class RedAgentState:
         self.log_event({"phase": "finding", "category": category, "detail": detail, "success": success})
 
     def recall_summary(self) -> str:
+        if not self.config.memory_enabled:
+            return ""
         data = load_memory(self.config.memory_path)
         if not data or not data.get("entries"):
             return ""

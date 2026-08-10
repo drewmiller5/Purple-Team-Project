@@ -126,6 +126,10 @@ services:
       - RED_MEMORY_PATH=/app/red_agent/memory/red_memory.json
       - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
       - REFEREE_STATE_DIR=/app/referee_state
+      # Memory on/off toggle: set to false to run a round with red/blue
+      # blind to red_memory.json/blue_memory.json (recall_past_findings
+      # returns nothing) without deleting either file. Comparison/demo flag.
+      - MEMORY_ENABLED=${MEMORY_ENABLED:-true}
     volumes:
       - red-memory:/app/red_agent/memory
       - event-log:/app/shared_logs
@@ -153,6 +157,7 @@ services:
       - EVENT_LOG_PATH=/app/shared_logs/events.jsonl
       - WAZUH_ALERTS_PATH=/var/ossec/logs/alerts/alerts.json
       - REFEREE_STATE_DIR=/app/referee_state
+      - MEMORY_ENABLED=${MEMORY_ENABLED:-true}
     volumes:
       - blue-memory:/app/blue_agent/memory
       - event-log:/app/shared_logs
