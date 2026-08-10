@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from blue_agent.config import BlueAgentConfig
-from blue_agent.loop import _REASONING_TURN_SOFT_CAP_MULTIPLIER, run
+from blue_agent.loop import _MAX_CONTEXT_MESSAGES, _REASONING_TURN_SOFT_CAP_MULTIPLIER, _trim_messages, run
 
 
 def _config(tmp_path, max_iterations=3):
@@ -457,3 +457,58 @@ def test_run_stop_flag_acknowledgment_survives_oserror_from_log_event(tmp_path):
         with patch("blue_agent.loop.OllamaClient") as MockOllama:
             run(config)  # must not raise
             MockOllama.return_value.chat.assert_not_called()
+
+
+def test_trim_messages_keeps_system_prompt_and_caps_the_rest():
+    """Task 14 (H22/H57): trimming must never drop the system prompt, only
+    the oldest exchanges once the list exceeds the cap."""
+    system = {"role": "system", "content": "sys"}
+    rest = [{"role": "user", "content": str(i)} for i in range(_MAX_CONTEXT_MESSAGES + 20)]
+    messages = [system] + rest
+
+    trimmed = _trim_messages(messages)
+
+    assert len(trimmed) == _MAX_CONTEXT_MESSAGES + 1
+    assert trimmed[0] is system
+    assert trimmed[1:] == rest[-_MAX_CONTEXT_MESSAGES:]
+
+
+def test_trim_messages_is_a_noop_under_the_cap():
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    assert _trim_messages(messages) == messages
+
+
+def test_run_trims_messages_sent_to_ollama_when_context_grows_large(tmp_path):
+    """Task 14 (H22/H57): messages sent to Ollama each iteration must stay
+    bounded across a long round instead of growing for its whole duration."""
+    config = _config(tmp_path, max_iterations=60)
+    _touch_go_flag(config)
+    tool_call_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "recall_past_findings", "arguments": {}}}
+            ],
+        }
+    }
+    # `messages` is mutated in place after each chat() call (assistant/tool
+    # messages appended), so call_args_list would show post-mutation state
+    # for every entry but the last -- record length at call time instead.
+    message_lengths = []
+
+    def _capture(messages, tools):
+        message_lengths.append(len(messages))
+        return tool_call_response
+
+    with patch("blue_agent.loop.OllamaClient") as MockOllama, \
+         patch("blue_agent.loop.WazuhAlertsReader") as MockAlerts, \
+         patch("blue_agent.loop.dispatch_tool_call") as mock_dispatch:
+        MockAlerts.return_value.poll_new_alerts.return_value = [{"rule": {"id": "100101"}}]
+        mock_dispatch.return_value = "ok"
+        MockOllama.return_value.chat.side_effect = _capture
+        run(config)
+
+        # Untrimmed, 60 action turns (each appending an alert user message,
+        # an assistant message, and a tool result) would leave ~181 messages.
+        assert max(message_lengths) <= _MAX_CONTEXT_MESSAGES + 1

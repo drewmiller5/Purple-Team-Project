@@ -51,11 +51,21 @@ _GO_WAIT_POLL_SECONDS = 1.0
 # stop.flag is somehow never written.
 _REASONING_TURN_SOFT_CAP_MULTIPLIER = 10
 
-# ponytail: this soft cap means `messages` can now grow up to 10x further
-# in a reasoning-heavy round before the loop ends, and nothing here trims
-# or summarizes it -- full history is resent to Ollama every turn. Pre-
-# existing gap (H22/H57, Plan 3C Phase 3 Task 14 caps/trims this for both
-# agents), just a wider ceiling now. Not this fix's scope to solve.
+# Task 14 (H22/H57): cap on `messages` sent to Ollama each iteration, so a
+# long round's history doesn't grow unbounded and eventually exceed the
+# model's context window. System prompt is always kept; only the oldest
+# exchanges are dropped once the list exceeds the cap.
+# ponytail: fixed message-count cap, not token-aware -- a handful of huge
+# messages (e.g. a big alert batch on blue's side) could still overflow
+# the real context window even under this cap. Upgrade to a token-budget
+# trim if that's observed in practice.
+_MAX_CONTEXT_MESSAGES = 40
+
+
+def _trim_messages(messages: list) -> list:
+    if len(messages) <= _MAX_CONTEXT_MESSAGES + 1:
+        return messages
+    return [messages[0]] + messages[-_MAX_CONTEXT_MESSAGES:]
 
 
 def _wait_for_go(referee_state_dir: str, poll_interval: float) -> None:
@@ -115,6 +125,7 @@ def run(config) -> None:
             state.log_event({"phase": "round_stop_acknowledged"})
             return
 
+        messages = _trim_messages(messages)
         try:
             response = ollama.chat(messages=messages, tools=TOOL_SCHEMAS)
             assistant_message = response["message"]
