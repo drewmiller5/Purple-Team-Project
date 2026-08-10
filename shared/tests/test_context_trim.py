@@ -44,6 +44,31 @@ def test_trim_messages_drops_leading_orphaned_tool_message():
     assert trimmed[1] is filler[0]
 
 
+def test_trim_messages_drops_a_multi_tool_call_orphan_run():
+    """Dual code-review follow-up: a single turn can carry 2+ tool_calls,
+    producing 2+ consecutive tool-role messages. A cut landing inside that
+    run must strip the whole orphaned run (the while loop, not just its
+    first iteration), not leave any of them dangling."""
+    system = {"role": "system", "content": "sys"}
+    paired_assistant = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": "x", "arguments": {}}}] * 3,
+    }
+    tool_1 = {"role": "tool", "content": "result-1"}
+    tool_2 = {"role": "tool", "content": "result-2"}
+    tool_3 = {"role": "tool", "content": "result-3"}
+    filler = [{"role": "user", "content": str(i)} for i in range(MAX_CONTEXT_MESSAGES - 3)]
+    messages = [system, paired_assistant, tool_1, tool_2, tool_3] + filler
+
+    trimmed = trim_messages(messages)
+
+    assert trimmed[0] is system
+    for orphan in (tool_1, tool_2, tool_3):
+        assert orphan not in trimmed
+    assert trimmed[1] is filler[0]
+
+
 def test_trim_messages_keeps_a_clean_tool_pair_when_the_boundary_lands_on_it():
     """A pair that survives the naive cut intact (assistant.tool_calls and
     its tool response both land past the boundary, since they're the most

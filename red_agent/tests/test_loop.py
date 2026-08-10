@@ -1,5 +1,6 @@
 # red_agent/tests/test_loop.py
 import json
+import random
 from pathlib import Path
 from unittest.mock import patch
 
@@ -412,29 +413,46 @@ def test_run_trims_messages_sent_to_ollama_when_context_grows_large(tmp_path):
 def test_run_never_sends_ollama_a_dangling_tool_message_across_mixed_turns(tmp_path):
     """Dual code-review finding on this fix's first version: reasoning turns
     append 1 message, action turns append an assistant + one tool message
-    per call -- alternating the two drifts message count by an odd amount
-    each reasoning turn, which used to let the trim boundary land inside a
+    per call -- mixing the two drifts message count by an amount that
+    varies by turn, which used to let the trim boundary land inside a
     tool-call pair and send Ollama a dangling tool message. Every messages
     list actually sent to Ollama must preserve the invariant that any
     tool-role message is immediately preceded by an assistant message
-    carrying tool_calls."""
+    carrying tool_calls.
+
+    Second-round dual-review finding: a fixed 1:1 reasoning/action
+    alternation happens to keep every cut landing on a clean turn boundary
+    for this codebase's specific message-count arithmetic -- both
+    reviewers independently confirmed the original version of this test
+    would pass identically against the pre-fix naive trim, i.e. it caught
+    nothing. Randomizing the turn pattern (fixed seed, so still
+    deterministic) and varying tool_calls count per action turn (so
+    multi-tool-call orphan runs get exercised too, not just single ones)
+    closes that gap."""
     config = _config(tmp_path, max_iterations=40)
     _touch_go_flag(config)
     reasoning_response = {"message": {"role": "assistant", "content": "thinking", "tool_calls": []}}
-    action_response = {
-        "message": {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
-            ],
+
+    def _action_response(n_tool_calls):
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "record_finding", "arguments": {"category": "sqli", "detail": "x", "success": True}}}
+                    for _ in range(n_tool_calls)
+                ],
+            }
         }
-    }
+
     captured = []
+    rng = random.Random(1337)
 
     def _capture(messages, tools):
         captured.append(list(messages))
-        return action_response if len(captured) % 2 == 0 else reasoning_response
+        if rng.random() < 0.5:
+            return reasoning_response
+        return _action_response(rng.choice([1, 2, 3]))
 
     with patch("red_agent.loop.OllamaClient") as MockOllama, \
          patch("red_agent.loop.dispatch_tool_call") as mock_dispatch:
@@ -442,10 +460,14 @@ def test_run_never_sends_ollama_a_dangling_tool_message_across_mixed_turns(tmp_p
         MockOllama.return_value.chat.side_effect = _capture
         run(config)
 
-    assert len(captured) > 40  # sanity: the alternation and trim both actually ran
+    assert len(captured) > 40  # sanity: the mixed pattern and trim both actually ran
     for messages in captured:
         for i, m in enumerate(messages):
-            if m.get("role") == "tool":
+            # A multi-tool-call turn is [assistant, tool, tool, ...] -- only
+            # the *start* of a tool-message run needs an assistant.tool_calls
+            # predecessor; a tool message preceded by another tool message
+            # is mid-run, not dangling.
+            if m.get("role") == "tool" and (i == 0 or messages[i - 1].get("role") != "tool"):
                 assert i > 0
                 predecessor = messages[i - 1]
                 assert predecessor.get("role") == "assistant" and predecessor.get("tool_calls"), (
