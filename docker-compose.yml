@@ -108,6 +108,7 @@ services:
       context: .
       dockerfile: red_agent/Dockerfile
     container_name: purple-lab-red
+    restart: on-failure
     networks:
       - lab-net
       - agent-net
@@ -140,6 +141,7 @@ services:
       context: .
       dockerfile: blue_agent/Dockerfile
     container_name: purple-lab-blue
+    restart: on-failure
     networks:
       - lab-net
       - agent-net
@@ -172,6 +174,19 @@ services:
       context: .
       dockerfile: referee/Dockerfile
     container_name: purple-lab-referee
+    # H50: previously no restart policy at all, so a crash left the round
+    # permanently stuck (manual intervention required, but no state
+    # corruption). on-failure trades that for auto-recovery, but referee's
+    # round-start time and current flag assignment aren't persisted to
+    # disk (only `processed_through` is) -- a crash-restart mid-round
+    # silently resets the round's time budget and appends a spurious extra
+    # white_memory.json "preparation" entry, rather than resuming cleanly.
+    # Flagged independently by dual review; judged an acceptable tradeoff
+    # for coursework (crash-mid-round is rare, "stuck forever" is a worse
+    # default failure mode than "occasionally resets"), not fixed here --
+    # would need round state persisted alongside processed_through to do
+    # properly.
+    restart: on-failure
     # Deliberately no `networks:` entry -- the referee never makes an HTTP
     # call to anything. It only reads the shared event log and writes flag
     # files/its own assessment log, all via volumes. This is the strongest
@@ -239,6 +254,13 @@ services:
       context: .
       dockerfile: round_helper/Dockerfile
     container_name: purple-lab-round-helper
+    # unless-stopped, not on-failure: round_helper is a persistent
+    # control-plane server (same lifecycle class as target/purple_dashboard,
+    # both unless-stopped below) -- it has no round-boundary exit logic at
+    # all, unlike referee/red_agent/blue_agent, which really do return
+    # cleanly at round end. Both dual-review passes on this task
+    # independently flagged on-failure as the wrong policy for it.
+    restart: unless-stopped
     networks:
       - agent-net
     volumes:
