@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <p class="hero__eyebrow">Freight &amp; Logistics</p>
+  <h1>Meridian Logistics</h1>
+  <p>Freight you can track. Real-time status on every shipment, from dock to destination.</p>
+  <a class="btn" href="/search">Track a shipment &rarr;</a>
+
+  <dl class="stat-strip">
+    <div class="stat-strip__item">
+      <dt>Active lanes</dt>
+      <dd>Domestic &amp; International</dd>
+    </div>
+    <div class="stat-strip__item">
+      <dt>Tracking format</dt>
+      <dd>MER-prefixed</dd>
+    </div>
+    <div class="stat-strip__item">
+      <dt>Staff access</dt>
+      <dd><a href="/admin/login">Portal login</a></dd>
+    </div>
+  </dl>
+</section>
+{% endblock %}

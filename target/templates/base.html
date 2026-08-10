@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Meridian Logistics{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="wordmark" href="/">
+        <span class="wordmark__mark">ML</span>
+        <span class="wordmark__name">Meridian Logistics</span>
+      </a>
+      <nav class="site-nav">
+        <a href="/">Home</a>
+        <a href="/search">Track a Shipment</a>
+        <a href="/admin/login">Staff Portal</a>
+      </nav>
+    </div>
+  </header>
+  <div class="route-rule" aria-hidden="true"></div>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    Meridian Logistics &middot; Freight you can track
+  </footer>
+</body>
+</html>

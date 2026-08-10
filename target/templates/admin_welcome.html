@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Staff Portal &middot; Meridian Logistics{% endblock %}
+
+{% block content %}
+<section class="panel" style="max-width: 380px; margin: 0 auto;">
+  <h1>Welcome, {{ username }}</h1>
+  <p class="panel__subtitle">You're signed in to the Meridian Logistics staff portal.</p>
+  <span class="welcome-card__role">Role: {{ role }}</span>
+</section>
+{% endblock %}

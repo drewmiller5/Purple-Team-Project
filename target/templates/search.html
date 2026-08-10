@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Track a Shipment &middot; Meridian Logistics{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h1>Track a Shipment</h1>
+  <p class="panel__subtitle">Enter a tracking number or city to look up freight status.</p>
+
+  <form method="get" class="search-form">
+    <div class="field">
+      <label for="q">Tracking # or city</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="e.g. MER10023 or Charlotte">
+    </div>
+    <button type="submit" class="btn">Search</button>
+  </form>
+
+  {% if results %}
+  <ul class="results">
+    {% for row in results %}
+    <li class="shipment-row">
+      <span class="shipment-row__tracking">{{ row.tracking_number }}</span>
+      <span class="shipment-row__route">{{ row.origin }} &rarr; {{ row.destination }}</span>
+      {% if row.status == "In Transit" %}
+        <span class="status-pill status-pill--in-transit">{{ row.status }}</span>
+      {% elif row.status == "Delivered" %}
+        <span class="status-pill status-pill--delivered">{{ row.status }}</span>
+      {% elif row.status == "Delayed" %}
+        <span class="status-pill status-pill--delayed">{{ row.status }}</span>
+      {% elif row.status == "Customs Hold" %}
+        <span class="status-pill status-pill--customs-hold">{{ row.status }}</span>
+      {% else %}
+        <span class="status-pill status-pill--other">{{ row.status }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif q %}
+  <p class="empty-state">No shipments matched &ldquo;{{ q }}&rdquo;.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -3,7 +3,7 @@ from flask import (
     Blueprint,
     current_app,
     jsonify,
-    render_template_string,
+    render_template,
     request,
     session,
 )
@@ -13,21 +13,11 @@ from target.db import get_connection, is_blocked
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
-LOGIN_FORM = """
-<h1>Meridian Logistics — Staff Portal</h1>
-<form method="post">
-  <input type="text" name="username" placeholder="Username">
-  <input type="password" name="password" placeholder="Password">
-  <button type="submit">Log in</button>
-</form>
-{% if error %}<p style="color:red">{{ error }}</p>{% endif %}
-"""
-
 
 @admin_bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
-        return render_template_string(LOGIN_FORM, error=None)
+        return render_template("admin_login.html", error=None)
 
     username = request.form.get("username", "")
     password = request.form.get("password", "")
@@ -35,10 +25,13 @@ def login():
     conn = get_connection(current_app.config["DB_PATH"])
     if is_blocked(conn, username=username):
         conn.close()
-        return render_template_string(LOGIN_FORM, error="Account blocked")
+        return render_template("admin_login.html", error="Account blocked")
 
+    # synthetic = 0: dataset-volume filler users (target/db.py's ~100
+    # generated accounts) must never authenticate here -- they exist only
+    # for SQLi-discoverable realism in /search results.
     row = conn.execute(
-        "SELECT id, password_hash, role FROM users WHERE username = ?",
+        "SELECT id, password_hash, role FROM users WHERE username = ? AND synthetic = 0",
         (username,),
     ).fetchone()
     conn.close()
@@ -47,11 +40,11 @@ def login():
     # attempts. Combined with a weak seeded password, this makes the
     # admin panel brute-forceable — the seeded vuln for Phase 1.
     if row is None or not check_password_hash(row["password_hash"], password):
-        return render_template_string(LOGIN_FORM, error="Invalid credentials")
+        return render_template("admin_login.html", error="Invalid credentials")
 
     session["user_id"] = row["id"]
     session["role"] = row["role"]
-    return f"<h1>Welcome, {username}</h1><p>Role: {row['role']}</p>"
+    return render_template("admin_welcome.html", username=username, role=row["role"])
 
 
 @admin_bp.route("/whoami")

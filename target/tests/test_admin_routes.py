@@ -63,6 +63,25 @@ def test_no_lockout_after_repeated_failed_attempts(tmp_path):
     assert b"Welcome, admin" in response.data
 
 
+def test_generated_filler_accounts_cannot_authenticate(tmp_path):
+    """Security fix: the ~100 generated filler users (target/db.py) exist
+    for SQLi-discoverable dataset realism only -- they must never become a
+    real, functional second login surface. Their credentials are also
+    deterministically reproducible from committed source on a public repo,
+    so if this route ever accepted them, anyone could log in as any of 100
+    "employees" forever, regardless of hash cost."""
+    from random import Random
+
+    from target.db import _SEED, _generate_users
+
+    client = _make_client(tmp_path)
+    username, _password_hash, _role, plaintext = _generate_users(1, Random(_SEED))[0]
+
+    response = client.post("/admin/login", data={"username": username, "password": plaintext})
+
+    assert b"Invalid credentials" in response.data
+
+
 def test_secret_key_is_not_hardcoded_across_app_instances(tmp_path):
     """H6 regression test: SECRET_KEY must be generated per app instance,
     not a fixed source-committed literal. Two separately created apps
