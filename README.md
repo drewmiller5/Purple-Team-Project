@@ -132,3 +132,20 @@ Wazuh services, nothing gates access to `target` at all.
 Next: Plan 2 (red agent) and Plan 3 (blue agent), per `docs/design.md`.
 
 **Note:** Docker runtime verification (build, run, network isolation) is deferred until Docker is installed locally.
+
+## Future work
+
+- **Try a stronger/newer model.** `red_agent`/`blue_agent` both run on
+  `OLLAMA_MODEL` (env var, defaults to `qwen2.5:7b` -- no code change
+  needed to swap it, see `.env.example`). The paper's own results and
+  this repo's current round-timing constants (`RED_MAX_ITERATIONS`,
+  `BLUE_MAX_ITERATIONS`, the referee's 900s round budget) were tuned
+  against qwen2.5:7b's observed pace, so a bigger model isn't a drop-in
+  swap -- it'd need its own re-tuning pass, not just an env var change.
+  Worth trying regardless: giving the agents a genuinely current model
+  (browse [ollama.com/search](https://ollama.com/search) for what's
+  available; `qwen3:30b` looks like a good next step) is a natural way to
+  see whether the offense-defense balance this project studies shifts as
+  the underlying model gets stronger -- modern problems deserve a shot
+  against modern models, not just whatever was current when the lab was
+  first built.
