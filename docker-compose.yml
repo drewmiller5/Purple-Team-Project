@@ -258,17 +258,16 @@ services:
     restart: always
     networks:
       - wazuh-net
-    ports:
-      # Task 8 (H48): bind to loopback only -- was published to all host
-      # interfaces, reachable by anything that can reach the host at all.
-      # Fix-round note (item #5): this binding is a functional no-op here
-      # specifically -- wazuh.indexer's only network (wazuh-net) is
-      # internal:true, so on this Docker Engine/Docker Desktop the port
-      # never binds to the host at all regardless of the 127.0.0.1 prefix.
-      # Correct and meaningful on native Linux Docker (H53's original
-      # threat model); silently non-functional on Docker Desktop. See
-      # wazuh.dashboard's networks: comment for how this was confirmed.
-      - "127.0.0.1:9200:9200"
+    # No `ports:` -- host access to the raw OpenSearch API was a debugging
+    # convenience only (curl/Postman), not something the experiment needs:
+    # the dashboard and wazuh.manager both talk to this over wazuh-net
+    # internally, and blue_agent reads alerts via a read-only file mount,
+    # never this API. Previously bound 127.0.0.1:9200:9200 -- observed
+    # live to silently and inconsistently drop that binding across Docker
+    # Desktop engine restarts (WSL2 networking quirk, not a stale
+    # container: the container's own config-hash matched what was on
+    # disk, so `up -d` wouldn't have touched it either way). Removed
+    # rather than chased, since nothing here depends on it.
     environment:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
     ulimits:
@@ -306,8 +305,8 @@ services:
         hard: 655360
     ports:
       # Task 8 (H48): bind to loopback only -- these were published to all
-      # host interfaces (agent enrollment, agent data, syslog, and the API
-      # were all reachable by anything that could reach the host at all).
+      # host interfaces (agent enrollment, agent data, and syslog were all
+      # reachable by anything that could reach the host at all).
       # Fix-round note (item #5): same Docker Desktop caveat as
       # wazuh.indexer's ports: comment above -- wazuh.manager is also
       # wazuh-net-only (internal:true), so these never bind to the host
@@ -316,7 +315,16 @@ services:
       - "127.0.0.1:1514:1514"
       - "127.0.0.1:1515:1515"
       - "127.0.0.1:514:514/udp"
-      - "127.0.0.1:55000:55000"
+    # No 55000 (manager REST API) -- host access to it was a debugging
+    # convenience only (curl/Postman), not something the experiment needs:
+    # nothing on the red/blue/detection path calls it, blue_agent reads
+    # alerts via a read-only file mount instead. Previously bound
+    # 127.0.0.1:55000:55000 -- observed live to silently and
+    # inconsistently drop that binding across Docker Desktop engine
+    # restarts (WSL2 networking quirk, not a stale container: the
+    # container's own config-hash matched what was on disk, so `up -d`
+    # wouldn't have touched it either way). Removed rather than chased,
+    # since nothing here depends on it.
     environment:
       - INDEXER_URL=https://wazuh.indexer:9200
       - INDEXER_USERNAME=admin

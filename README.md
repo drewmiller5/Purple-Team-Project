@@ -20,6 +20,21 @@ See `docs/design.md` for the full spec.
 
 ## Run in Docker (isolated network)
 
+### Quickstart
+
+    pipenv run python scripts/bootstrap.py
+
+Generates `.env` with random secrets if it doesn't exist yet (including
+syncing the Wazuh indexer's bcrypt password hashes into
+`wazuh/config/wazuh_indexer/internal_users.yml` -- a plain env var alone
+isn't enough for those two), brings the stack up, and prints a copy-paste
+credentials block for every login surface (target's seeded staff creds, the
+round-control dashboard, and Wazuh). Also saves that block to
+`QUICKSTART_CREDENTIALS.md` (gitignored) for later reference. Safe to
+re-run -- it never touches an `.env` that already exists.
+
+### Manual setup
+
 Requires `INTERNAL_ACTION_TOKEN` set (shared secret authenticating `target`'s
 internal defensive endpoints against `blue_agent` and Wazuh's active-response
 scripts; no default, the stack fails closed without it) and
@@ -61,9 +76,14 @@ Wazuh services, nothing gates access to `target` at all.
   (`SecretPassword`, `kibanaserver`/`kibanaserver`) -- they're rotated,
   externally-supplied values read from `.env` (`WAZUH_INDEXER_PASSWORD`,
   `WAZUH_API_PASSWORD`, `WAZUH_DASHBOARD_PASSWORD`; see `.env.example` and
-  `wazuh/README.md`), and the indexer/manager/dashboard host ports (9200,
-  1514, 1515, 514, 55000, 443) are bound to `127.0.0.1` only, not all
-  interfaces. Agent enrollment additionally requires a pre-shared key
+  `wazuh/README.md`), and the manager/dashboard host ports still published
+  (1514, 1515, 514, 443) are bound to `127.0.0.1` only, not all interfaces.
+  The raw indexer API (9200) and manager API (55000) are no longer
+  published to the host at all -- debugging convenience only (curl/
+  Postman), not something the experiment needs, and observed live to
+  silently and inconsistently drop their loopback binding across Docker
+  Desktop engine restarts; removed rather than chased.
+  Agent enrollment additionally requires a pre-shared key
   (`wazuh/config/wazuh_cluster/authd.pass`, generated locally, gitignored).
   `red_agent` is not attached to `wazuh-net` (the network `wazuh.manager`/
   `wazuh.indexer`/`wazuh.dashboard` share) -- only `target` is, multi-homed
