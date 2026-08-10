@@ -223,6 +223,28 @@ def test_run_handles_ollama_http_error_gracefully(tmp_path):
     assert any(e["phase"] == "run_complete" for e in events)
 
 
+def test_run_backs_off_before_retrying_after_ollama_error(tmp_path):
+    """H9: unlike blue_agent (which sleeps before retrying a failed Ollama
+    call), red_agent retried instantly -- hammering a degraded Ollama host
+    for the rest of the run. Must back off first, matching blue's pattern."""
+    config = _config(tmp_path, max_iterations=2)
+    _touch_go_flag(config)
+
+    with patch("red_agent.loop.OllamaClient") as MockOllama, \
+         patch("red_agent.loop.time.sleep") as mock_sleep:
+        error_response = requests.Response()
+        error_response.status_code = 500
+        http_error = requests.HTTPError(response=error_response)
+        MockOllama.return_value.chat.side_effect = http_error
+
+        run(config)
+
+        # go.flag is already touched by _touch_go_flag above, so
+        # _wait_for_go's own poll loop never sleeps -- every one of these
+        # calls comes from the Ollama-failure backoff itself.
+        assert mock_sleep.call_count >= config.max_iterations
+
+
 def test_run_handles_ollama_key_error_gracefully(tmp_path):
     """Test that unexpected Ollama response shapes (KeyError) don't crash the loop."""
     config = _config(tmp_path, max_iterations=2)

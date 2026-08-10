@@ -117,6 +117,7 @@ def run(config) -> None:
             assistant_message = response["message"]
         except (requests.RequestException, KeyError) as exc:
             state.log_event({"phase": "ollama_error", "error": str(exc)})
+            time.sleep(_GO_WAIT_POLL_SECONDS)
             iteration_count += 1
             continue
 
@@ -125,6 +126,7 @@ def run(config) -> None:
                 "phase": "ollama_error",
                 "error": f"unexpected message shape: {assistant_message!r}",
             })
+            time.sleep(_GO_WAIT_POLL_SECONDS)
             iteration_count += 1
             continue
         messages.append(assistant_message)

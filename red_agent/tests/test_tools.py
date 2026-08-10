@@ -84,6 +84,59 @@ def test_dispatch_unknown_tool_returns_error():
     assert json.loads(result) == {"error": "unknown tool nonexistent_tool"}
 
 
+def test_dispatch_record_finding_coerces_string_bool_success():
+    """H18: TOOL_SCHEMAS declares `success` as a boolean, but a model can
+    emit a string like "true" -- must be coerced, not persisted as-is."""
+    state = MagicMock()
+    call = {
+        "function": {
+            "name": "record_finding",
+            "arguments": {"category": "sqli", "detail": "found it", "success": "true"},
+        }
+    }
+    result = dispatch_tool_call(call, http=MagicMock(), state=state)
+
+    state.record_finding.assert_called_once_with("sqli", "found it", True)
+    assert json.loads(result) == {"recorded": True}
+
+
+def test_dispatch_record_finding_rejects_non_boolean_success():
+    """H18: a value that isn't a bool or a recognizable "true"/"false" string
+    must be rejected cleanly, not stored unchecked and fed back into later
+    runs as a misleading history entry."""
+    state = MagicMock()
+    call = {
+        "function": {
+            "name": "record_finding",
+            "arguments": {"category": "sqli", "detail": "found it", "success": "maybe"},
+        }
+    }
+    result = dispatch_tool_call(call, http=MagicMock(), state=state)
+
+    state.record_finding.assert_not_called()
+    assert "error" in json.loads(result)
+
+
+def test_dispatch_http_request_rejects_method_outside_declared_enum():
+    """H64: TOOL_SCHEMAS's method enum (GET/POST) is currently advisory
+    only -- dispatch_tool_call passes args["method"] straight through with
+    no allow-list check. Must be server-enforced, not just advisory."""
+    http = MagicMock()
+    state = MagicMock()
+    state.recon_done = True  # even post-recon, an out-of-enum method must be rejected
+
+    call = {
+        "function": {
+            "name": "http_request",
+            "arguments": {"method": "DELETE", "path": "/admin/users/1"},
+        }
+    }
+    result = dispatch_tool_call(call, http=http, state=state)
+
+    http.request.assert_not_called()
+    assert "error" in json.loads(result)
+
+
 def test_dispatch_http_request_missing_required_arg_returns_clean_error():
     call = {
         "function": {

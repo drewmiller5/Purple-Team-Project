@@ -1,6 +1,10 @@
 # red_agent/tools.py
 import json
 
+# H64: TOOL_SCHEMAS's http_request.method enum, enforced server-side here
+# rather than left advisory-only to the model.
+_ALLOWED_HTTP_METHODS = ("GET", "POST")
+
 # K5: enforced recon-before-attack phase gate. Only one real target-facing
 # tool exists (http_request), so classification happens on the request
 # shape rather than a separate tool name: any state-changing POST, or any
@@ -71,6 +75,17 @@ def _is_attack_class(method: str, path: str, params: dict | None, data: dict | N
     return any(marker in haystack for marker in _ATTACK_INDICATORS)
 
 
+def _coerce_bool_arg(value):
+    # H18: TOOL_SCHEMAS declares `success` as a boolean, but a model can
+    # emit a string -- coerce the unambiguous cases, reject the rest rather
+    # than persisting a misleading history entry fed back into later runs.
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"expected a boolean, got {value!r}")
+
+
 def dispatch_tool_call(call: dict, http, state) -> str:
     name = call["function"]["name"]
     args = call["function"].get("arguments", {})
@@ -83,6 +98,8 @@ def dispatch_tool_call(call: dict, http, state) -> str:
             path = args["path"]
         except KeyError as exc:
             return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
+        if str(method).upper() not in _ALLOWED_HTTP_METHODS:
+            return json.dumps({"error": f"unsupported method {method!r}; only GET/POST are allowed"})
         params = args.get("params")
         data = args.get("data")
         is_attack = _is_attack_class(method, path, params, data)
@@ -106,9 +123,11 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         try:
             category = args["category"]
             detail = args["detail"]
-            success = args["success"]
+            success = _coerce_bool_arg(args["success"])
         except KeyError as exc:
             return json.dumps({"error": f"missing or invalid arguments for {name}: {exc}"})
+        except ValueError as exc:
+            return json.dumps({"error": f"invalid arguments for {name}: {exc}"})
         state.record_finding(category, detail, success)
         return json.dumps({"recorded": True})
 
