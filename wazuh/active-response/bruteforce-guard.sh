@@ -87,12 +87,22 @@ LOCK_ACCOUNT_SCRIPT="/var/ossec/active-response/bin/lock-account.sh"
 # write end as soon as `echo` exits -- a real EOF, unlike execd's own
 # child pipe.)
 IFS= read -r INPUT_JSON
-SRCIP=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.srcip | select(. != null and . != "null")')
 # Fix round 1 finding #3: anchor the counting window to the triggering
 # event's OWN timestamp (data.timestamp, propagated from
 # target/logging_middleware.py's requests.jsonl line straight through to
 # the alert payload), not to wall-clock time at script-invocation.
-EVENT_TS=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.timestamp | select(. != null and . != "null")')
+#
+# H44 fix (Task 20): wrap both initial extractions so a jq failure here
+# (a malformed, non-JSON INPUT_JSON) logs one line before exiting, instead
+# of `set -eu` aborting silently on the spot -- same idiom as
+# idor-guard.sh's matching fix.
+if SRCIP=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.srcip | select(. != null and . != "null")' 2>/dev/null) &&
+   EVENT_TS=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.timestamp | select(. != null and . != "null")' 2>/dev/null); then
+    :
+else
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/bruteforce-guard: jq failed to parse initial AR payload (malformed JSON?) -- aborting" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 # No source IP or event timestamp decoded -> nothing to count against.
 # Exit quietly.

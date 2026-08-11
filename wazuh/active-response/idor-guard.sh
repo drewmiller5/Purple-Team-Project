@@ -125,14 +125,67 @@ IFS= read -r INPUT_JSON
 
 # Fix round 1 finding #4: dispatch mode ("add" on every rule match,
 # "delete" once <timeout> seconds after each "add" -- see file header).
-COMMAND=$(echo "$INPUT_JSON" | jq -r '.command | select(. != null and . != "null")')
-SRCIP=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.srcip | select(. != null and . != "null")')
+#
+# H44 fix (Task 20): wrap both initial extractions so a jq failure here
+# (a malformed, non-JSON INPUT_JSON) logs one line before exiting, instead
+# of `set -eu` aborting silently on the spot -- same `if`/`else` idiom as
+# the COUNT computation further down, since a bare `VAR=$(...)` command
+# substitution failing is exactly what `-e` treats as immediately fatal,
+# before any exit code is ever readable.
+if COMMAND=$(echo "$INPUT_JSON" | jq -r '.command | select(. != null and . != "null")' 2>/dev/null) &&
+   SRCIP=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.srcip | select(. != null and . != "null")' 2>/dev/null); then
+    :
+else
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: jq failed to parse initial AR payload (malformed JSON?) -- aborting" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 # No source IP decoded -> nothing to count against, block, or reverse.
 # Exit quietly.
 if [ -z "${SRCIP:-}" ]; then
     exit 0
 fi
+
+# H38 fix (Task 20): validate SRCIP's shape before it's interpolated into
+# STATE_FILE/LOCK_FILE paths below. Not currently reachable without a
+# reverse proxy in front of target rewriting Wazuh's decoded srcip field
+# to something attacker-controlled, but defensive regardless -- restrict
+# to characters a real IPv4/IPv6 address can contain (hex digits, dots,
+# colons) so nothing resembling a path segment (`/`, `..`) can ever reach
+# a filesystem path built from this value.
+#
+# Review round 1 findings (both independent reviewers, same underlying
+# bug, from two angles): (1) the character class alone let ".." straight
+# through -- "." and ".." consist entirely of characters already in the
+# allowed set, so SRCIP=".." made STATE_FILE/LOCK_FILE alias STATE_DIR's
+# own parent (/tmp), a real one-level directory-traversal escape the
+# comment above claimed to block but the implementation never actually
+# checked for. Fixed with an explicit ".." substring check ahead of the
+# character-class check. (2) The character-class rejection branch used to
+# echo the raw, not-yet-validated $SRCIP straight into
+# active-responses.log -- since jq -r decodes real JSON string escapes, a
+# payload embedding a literal newline in data.srcip could forge additional
+# lines in the security-response audit log (log injection) via the exact
+# branch meant to reject it. Neither branch below logs $SRCIP's value
+# anymore, only a fixed message.
+#
+# LC_ALL=C pins bracket-range collation for the case patterns below to a
+# fixed byte-range meaning regardless of container locale -- this is a
+# trust-boundary check, so it shouldn't depend on locale to behave
+# correctly.
+LC_ALL=C
+case "$SRCIP" in
+    *..*)
+        echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: srcip contains '..' -- refusing to use in a file path" >> /var/ossec/logs/active-responses.log
+        exit 1
+        ;;
+esac
+case "$SRCIP" in
+    *[!0-9a-fA-F:.]*)
+        echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: srcip contains unexpected characters -- refusing to use in a file path" >> /var/ossec/logs/active-responses.log
+        exit 1
+        ;;
+esac
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE_FILE="$STATE_DIR/$SRCIP"
@@ -295,18 +348,52 @@ fi
 # does instead. This one line only lives on the threshold-crossing path;
 # the below-threshold no-op above stays silent/cheap on purpose (that's
 # the hot path -- fires on every single GET).
-echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: threshold ${THRESHOLD} crossed for ${SRCIP} (count=${COUNT}), inserting DROP" >> /var/ossec/logs/active-responses.log
-iptables -I INPUT -s "$SRCIP" -j DROP
-iptables -I FORWARD -s "$SRCIP" -j DROP
-
-# Record that this script inserted a real, reversible block for this IP
-# (fix round 1 finding #4) so a later "delete" dispatch knows to actually
-# reverse it. Fix round 2: read-modify-write serialized per source IP via
-# flock, same mechanism, lock file, and fd 9 (see delete path above for
-# why fd 9 specifically) as the delete path.
+#
+# Task 20 fix (H35/H36): the whole decide-and-block section -- not just
+# the counter increment -- is now serialized per source IP via the same
+# flock the delete path already used. Without this, a concurrent "delete"
+# dispatch for the same IP could acquire the lock first, see the counter
+# still at its pre-increment value (0, since this "add" hadn't reached its
+# increment yet), conclude "nothing to reverse", and no-op -- silently
+# reintroducing the exact stuck-rule bug fix round 1 closed (H35 by a
+# different route than the log-ordering fix below; H36 is this same
+# widened-lock change). The success log line is also only written after
+# both `iptables -I` calls have actually succeeded, with each call's exit
+# status checked explicitly (rather than relying on `set -e` to abort
+# silently mid-block), so the audit log and real firewall state can never
+# disagree.
+#
+# ponytail: the lock (still no -w/timeout, same reasoning as the delete
+# path) is now held across the `iptables -I` calls too, not just
+# sub-millisecond filesystem ops -- a stalled iptables call (kernel
+# xtables lock contention, etc.) now also stalls every other "add"/
+# "delete" dispatch queued behind it for this same source IP, including
+# that IP's own eventual reversal. Accepted at this lab's traffic volume;
+# a lock timeout would just reintroduce H36's original silent-undercount
+# bug, so the real upgrade path if this ever matters is bounding
+# iptables's own call time (e.g. `timeout 2 iptables ...`), not the lock.
 LOCK_FILE="$STATE_DIR/$SRCIP.lock"
 exec 9>"$LOCK_FILE"
 flock -x 9
+
+if ! iptables -I INPUT -s "$SRCIP" -j DROP; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: iptables INPUT insert FAILED for ${SRCIP} (count=${COUNT}) -- block NOT applied" >> /var/ossec/logs/active-responses.log
+    flock -u 9
+    exit 1
+fi
+if ! iptables -I FORWARD -s "$SRCIP" -j DROP; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: iptables FORWARD insert FAILED for ${SRCIP} (count=${COUNT}) -- INPUT rule inserted but FORWARD missing" >> /var/ossec/logs/active-responses.log
+    flock -u 9
+    exit 1
+fi
+echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/idor-guard: threshold ${THRESHOLD} crossed for ${SRCIP} (count=${COUNT}), inserting DROP" >> /var/ossec/logs/active-responses.log
+
+# Record that this script inserted a real, reversible block for this IP
+# (fix round 1 finding #4) so a later "delete" dispatch knows to actually
+# reverse it. Read-modify-write of the counter, still inside the same
+# lock acquisition as the iptables calls above (fix round 2's mechanism,
+# lock file, and fd 9 -- see delete path above for why fd 9 specifically
+# -- now widened per H36).
 ACTIVE_BLOCKS=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 case "$ACTIVE_BLOCKS" in ''|*[!0-9]*) ACTIVE_BLOCKS=0 ;; esac
 echo $((ACTIVE_BLOCKS + 1)) > "$STATE_FILE"

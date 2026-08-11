@@ -45,7 +45,34 @@ IFS= read -r INPUT_JSON
 # *string* "null" (not JSON null), so select() explicitly excludes both
 # forms -- real JSON null (field truly absent) and the string "null"
 # (unauthenticated request) -- leaving USER_ID empty in either case.
-USER_ID=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.user_id | select(. != null and . != "null")')
+#
+# H44 fix (Task 20): wrap the extraction so a jq failure here (a
+# malformed, non-JSON INPUT_JSON) logs one line before exiting, instead of
+# `set -eu` aborting silently on the spot.
+if USER_ID=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.user_id | select(. != null and . != "null")' 2>/dev/null); then
+    :
+else
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: jq failed to parse AR payload (malformed JSON?) -- aborting" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
+
+# Review round 1 finding (security-reviewer, same log-injection class as
+# idor-guard.sh's H38 rejection line and lock-account.sh's USERNAME):
+# strip control characters from USER_ID right after extraction, so every
+# downstream log line and the curl call itself only ever see a sanitized
+# value. USER_ID is session-derived (data.user_id, not attacker-supplied
+# form input, unlike lock-account.sh's USERNAME) so this is lower-risk in
+# practice, but applying the same fix here keeps both scripts consistent.
+USER_ID=$(printf '%s' "$USER_ID" | tr -d '\n\r')
+
+# H43 fix (Task 20): short-circuit before the curl call when no user_id
+# was decoded, matching the guard scripts' existing SRCIP/EVENT_TS
+# empty-value guards -- without this, an empty USER_ID still reached curl
+# and target's own validation instead of being caught here.
+if [ -z "${USER_ID:-}" ]; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/kill-session: no user_id decoded from alert payload -- refusing to call target" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 # K3 fix: curl's own exit status only reflects transport-level failure
 # (DNS, connection refused, etc.) -- a successful connection with a

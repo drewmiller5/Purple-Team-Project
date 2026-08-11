@@ -33,7 +33,34 @@ set -eu
 # not subject to the H32 hang (execd's stdin-never-closed behavior only
 # matters for scripts execd spawns directly) and is left as-is here.
 INPUT_JSON=$(cat)
-USERNAME=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.form_params.username | select(. != null and . != "null")')
+# H44 fix (Task 20): wrap the extraction so a jq failure here (a
+# malformed, non-JSON INPUT_JSON) logs one line before exiting, instead of
+# `set -eu` aborting silently on the spot.
+if USERNAME=$(echo "$INPUT_JSON" | jq -r '.parameters.alert.data.form_params.username | select(. != null and . != "null")' 2>/dev/null); then
+    :
+else
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/lock-account: jq failed to parse AR payload (malformed JSON?) -- aborting" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
+
+# Review round 1 finding (security-reviewer, same log-injection class as
+# idor-guard.sh's H38 rejection line): USERNAME is fully attacker-
+# controlled (an unauthenticated login form field) and jq -r decodes real
+# JSON string escapes, so a payload embedding a literal newline could
+# forge additional lines in every log statement below that interpolates
+# USERNAME. Strip control characters once here, right after extraction,
+# so every downstream log line and the curl call itself only ever see a
+# sanitized value.
+USERNAME=$(printf '%s' "$USERNAME" | tr -d '\n\r')
+
+# H43 fix (Task 20): short-circuit before the curl call when no username
+# was decoded, matching the guard scripts' existing SRCIP/EVENT_TS
+# empty-value guards -- without this, an empty USERNAME still reached
+# curl and target's own validation instead of being caught here.
+if [ -z "${USERNAME:-}" ]; then
+    echo "$(date -u '+%Y/%m/%d %H:%M:%S') active-response/bin/lock-account: no username decoded from alert payload -- refusing to call target" >> /var/ossec/logs/active-responses.log
+    exit 1
+fi
 
 # Final-review fix (finding #6): USERNAME is attacker-influenced and was
 # previously interpolated into the POST body unescaped (-d
