@@ -49,31 +49,50 @@ def _protected_source_ips():
             resolved_all = False
             continue
 
-    # Docker exposes the bridge gateway as the default route in the target
-    # container. Read it rather than assuming a compose-assigned subnet.
+    # Docker exposes the bridge gateway as the default route in a
+    # single-network container -- but a container attached ONLY to
+    # internal:true networks (e.g. target itself, deliberately egress-
+    # blocked per H71) never gets a default route (Destination 0.0.0.0)
+    # at all, since Docker only assigns one when a network can actually
+    # reach outside. H81/H68-round-2: live-reproduced in production --
+    # requiring that exact row meant this could NEVER succeed for
+    # target's real deployment, so block_ip was permanently refusing,
+    # not just during a genuine startup race. Docker still assigns every
+    # subnet's bridge gateway the lowest usable address in it (network
+    # base + 1) even when nothing routes "via" it -- derive the gateway
+    # from EVERY route line instead of requiring one specific "default"
+    # line to exist. A route with a real (non-zero) Gateway field is
+    # still used directly (the original single-homed case).
     route_resolved = True
     try:
         with open("/proc/net/route", encoding="utf-8") as routes:
-            found_default_route = False
-            for route in routes:
+            data_lines = [line for line in routes][1:]  # skip the header row
+            if not data_lines:
+                # Readable but no interface has attached to any network
+                # yet -- a genuine startup race, not a permanent property
+                # of this container's topology. Same failure class as a
+                # DNS gaierror: don't cache this result, let the next
+                # call retry.
+                route_resolved = False
+            parsed_any_line = False
+            for route in data_lines:
                 fields = route.split()
-                if len(fields) >= 3 and fields[1] == "00000000":
-                    try:
-                        protected.add(str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))))
-                        found_default_route = True
-                        break
-                    except (ValueError, OverflowError):
-                        # This line's gateway field didn't parse -- keep
-                        # scanning in case a later line (policy routing can
-                        # produce more than one Destination==00000000 row)
-                        # is well-formed, instead of giving up on the first.
-                        continue
-            if not found_default_route:
-                # The route table is readable but has no (parseable) default
-                # route yet -- a startup race (the container's networking
-                # hasn't finished coming up), not a permanent property of the
-                # environment. Same failure class as a DNS gaierror: don't
-                # cache this result, let the next call retry.
+                if len(fields) < 3:
+                    continue
+                try:
+                    destination = ipaddress.IPv4Address(int(fields[1], 16).to_bytes(4, "little"))
+                    gateway = ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little"))
+                    protected.add(str(gateway) if int(gateway) != 0 else str(destination + 1))
+                    parsed_any_line = True
+                except (ValueError, OverflowError):
+                    # This line (including the derived-gateway "+1"
+                    # above, e.g. a destination of 255.255.255.255)
+                    # didn't parse -- keep scanning the rest instead of
+                    # giving up on the whole route table.
+                    continue
+            if data_lines and not parsed_any_line:
+                # Every line was malformed -- the route table is
+                # present but useless, same as if it were empty.
                 route_resolved = False
     except FileNotFoundError:
         # Expected and permanent on non-Linux dev/test environments (no

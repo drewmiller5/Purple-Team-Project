@@ -312,25 +312,79 @@ def test_protected_source_ips_does_not_cache_a_degraded_result_after_dns_failure
         internal._protected_source_ips.cache_clear()
 
 
-def test_protected_source_ips_does_not_cache_a_missing_default_route(tmp_path):
-    # Security-reviewer-flagged gap in the fix above: /proc/net/route's
-    # OSError/ValueError guard only covers the file being entirely absent
-    # (permanent, e.g. non-Linux dev boxes). If the file is readable but
-    # the container's default route simply hasn't been programmed into
-    # the kernel routing table yet -- a startup race, same class of
-    # problem as an unresolvable hostname -- no exception is raised at
-    # all; the loop just finds nothing. That outcome must not be cached
-    # either, or the allowlist permanently loses the Docker bridge
-    # gateway protection.
+def test_protected_source_ips_derives_gateway_from_local_routes_with_no_default_route(tmp_path):
+    # H81/H68-round-2: live-reproduced in production. A container attached
+    # ONLY to internal:true networks (e.g. target itself, deliberately
+    # egress-blocked per H71) never gets a default route (Destination
+    # 0.0.0.0) at all -- Docker only assigns one when a network can
+    # actually reach outside. The original design required finding that
+    # exact row, so it could NEVER succeed for target's real deployment --
+    # block_ip was permanently refusing (H68), not just during a genuine
+    # startup race, confirmed live via real /proc/net/route content (two
+    # local/direct routes, zero default-route rows). Docker still assigns
+    # each such subnet's bridge gateway the lowest usable address in it
+    # (network base + 1) -- derive it from EVERY route line instead of
+    # requiring one specific "default" line to exist.
     from target.routes import internal
 
-    no_default_route = "Iface\tDestination\tGateway\n" "eth0\t0002000A\t00000000\n"
+    # Real shape observed live inside the target container: two local
+    # routes (lab-net, wazuh-net), Gateway=0 on both (no gateway needed
+    # for an on-link subnet), no Destination=0.0.0.0 row anywhere.
+    two_internal_networks_no_default = (
+        "Iface\tDestination\tGateway\n"
+        "eth0\t000015AC\t00000000\n"  # 172.21.0.0/16 -- gateway derived: 172.21.0.1
+        "eth1\t000017AC\t00000000\n"  # 172.23.0.0/16 -- gateway derived: 172.23.0.1
+    )
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
+            "target.routes.internal.open", return_value=io.StringIO(two_internal_networks_no_default)
+        ):
+            protected, resolved = internal._protected_source_ips()
+
+        assert resolved is True
+        assert "172.21.0.1" in protected
+        assert "172.23.0.1" in protected
+    finally:
+        internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_still_uses_explicit_default_route_gateway_when_present(tmp_path):
+    # Single-homed-with-real-default-route case must keep working exactly
+    # as before -- a route with a real (non-zero) Gateway field is used
+    # directly, not overridden by the base+1 derivation.
+    from target.routes import internal
+
     has_default_route = "Iface\tDestination\tGateway\n" "eth0\t00000000\t0100A8C0\n"
 
     internal._protected_source_ips.cache_clear()
     try:
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
-            "target.routes.internal.open", return_value=io.StringIO(no_default_route)
+            "target.routes.internal.open", return_value=io.StringIO(has_default_route)
+        ):
+            protected, resolved = internal._protected_source_ips()
+
+        assert resolved is True
+        assert "192.168.0.1" in protected
+    finally:
+        internal._protected_source_ips.cache_clear()
+
+
+def test_protected_source_ips_does_not_cache_when_route_table_has_no_data_rows_yet(tmp_path):
+    # The genuine startup race this must still catch: /proc/net/route is
+    # readable but has ONLY the header (no interface has attached to any
+    # network yet). That outcome must not be cached, or the allowlist
+    # permanently loses route-based protection.
+    from target.routes import internal
+
+    header_only = "Iface\tDestination\tGateway\n"
+    has_default_route = "Iface\tDestination\tGateway\n" "eth0\t00000000\t0100A8C0\n"
+
+    internal._protected_source_ips.cache_clear()
+    try:
+        with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
+            "target.routes.internal.open", return_value=io.StringIO(header_only)
         ):
             degraded, degraded_resolved = internal._protected_source_ips()
         assert "192.168.0.1" not in degraded
