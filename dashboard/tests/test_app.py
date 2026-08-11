@@ -20,10 +20,21 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
     monkeypatch.setenv("ADVISOR_LOG_PATH", str(tmp_path / "advisor.jsonl"))
     monkeypatch.setenv("DASHBOARD_AUTH_TOKEN", "test-dashboard-token")
+    # H55: separate scoped secrets per privilege domain, distinct from
+    # DASHBOARD_AUTH_TOKEN (which only gates *viewing* the dashboard).
+    # Each mutating action route additionally requires its own domain's
+    # token via the X-Action-Token header, so a single leaked secret
+    # doesn't grant all three capabilities (or the dashboard itself).
+    monkeypatch.setenv("DASHBOARD_RED_ACTION_TOKEN", "test-red-action-token")
+    monkeypatch.setenv("DASHBOARD_BLUE_ACTION_TOKEN", "test-blue-action-token")
+    monkeypatch.setenv("DASHBOARD_INFRA_ACTION_TOKEN", "test-infra-action-token")
     return create_app()
 
 
 AUTH = ("operator", "test-dashboard-token")
+RED_ACTION_HEADERS = {"X-Action-Token": "test-red-action-token"}
+BLUE_ACTION_HEADERS = {"X-Action-Token": "test-blue-action-token"}
+INFRA_ACTION_HEADERS = {"X-Action-Token": "test-infra-action-token"}
 
 
 def test_api_state_reports_latest_round_result(app):
@@ -128,7 +139,9 @@ def test_round_stop_endpoint_touches_stop_flag(app):
 def test_round_start_endpoint_calls_round_helper(app):
     with patch("dashboard.app.start_round", autospec=True) as mock_start:
         mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
-        response = app.test_client().post("/api/round/start", auth=AUTH)
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS
+        )
 
     assert response.status_code == 200
     # H54: round_helper gets its own dedicated token, not target's
@@ -140,7 +153,9 @@ def test_round_start_endpoint_calls_round_helper(app):
 def test_red_action_endpoint_delegates_to_run_red_action(app):
     with patch("dashboard.app.run_red_action", autospec=True) as mock_run:
         mock_run.return_value = {"status_code": 200, "body": "ok"}
-        response = app.test_client().post("/api/red-action", json={"template_name": "sqli"}, auth=AUTH)
+        response = app.test_client().post(
+            "/api/red-action", json={"template_name": "sqli"}, auth=AUTH, headers=RED_ACTION_HEADERS
+        )
 
     assert response.status_code == 200
     mock_run.assert_called_once()
@@ -149,10 +164,82 @@ def test_red_action_endpoint_delegates_to_run_red_action(app):
 def test_blue_action_endpoint_delegates_to_run_blue_action(app):
     with patch("dashboard.app.run_blue_action", autospec=True) as mock_run:
         mock_run.return_value = {"status_code": 200, "body": "ok"}
-        response = app.test_client().post("/api/blue-action", json={"action": "block_ip", "target": "10.0.0.5"}, auth=AUTH)
+        response = app.test_client().post(
+            "/api/blue-action",
+            json={"action": "block_ip", "target": "10.0.0.5"},
+            auth=AUTH,
+            headers=BLUE_ACTION_HEADERS,
+        )
 
     assert response.status_code == 200
     mock_run.assert_called_once()
+
+
+def test_red_action_endpoint_rejects_missing_action_token(app):
+    """H55: DASHBOARD_AUTH_TOKEN alone (view access) must not be enough
+    to fire a red action -- the caller also needs the red-scoped secret."""
+    with patch("dashboard.app.run_red_action", autospec=True) as mock_run:
+        response = app.test_client().post("/api/red-action", json={"template_name": "sqli"}, auth=AUTH)
+
+    assert response.status_code == 403
+    mock_run.assert_not_called()
+
+
+def test_red_action_endpoint_rejects_blue_scoped_token(app):
+    """H55: a leaked blue-action token must not unlock red actions --
+    the whole point of separating the three domains."""
+    with patch("dashboard.app.run_red_action", autospec=True) as mock_run:
+        response = app.test_client().post(
+            "/api/red-action", json={"template_name": "sqli"}, auth=AUTH, headers=BLUE_ACTION_HEADERS
+        )
+
+    assert response.status_code == 403
+    mock_run.assert_not_called()
+
+
+def test_blue_action_endpoint_rejects_missing_action_token(app):
+    with patch("dashboard.app.run_blue_action", autospec=True) as mock_run:
+        response = app.test_client().post(
+            "/api/blue-action", json={"action": "block_ip", "target": "10.0.0.5"}, auth=AUTH
+        )
+
+    assert response.status_code == 403
+    mock_run.assert_not_called()
+
+
+def test_blue_action_endpoint_rejects_red_scoped_token(app):
+    with patch("dashboard.app.run_blue_action", autospec=True) as mock_run:
+        response = app.test_client().post(
+            "/api/blue-action",
+            json={"action": "block_ip", "target": "10.0.0.5"},
+            auth=AUTH,
+            headers=RED_ACTION_HEADERS,
+        )
+
+    assert response.status_code == 403
+    mock_run.assert_not_called()
+
+
+def test_round_start_endpoint_rejects_missing_action_token(app):
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        response = app.test_client().post("/api/round/start", auth=AUTH)
+
+    assert response.status_code == 403
+    mock_start.assert_not_called()
+
+
+def test_round_start_endpoint_rejects_red_scoped_token(app):
+    """H55: the red/blue-action operator (or a leaked red/blue token)
+    must not be able to reach round_helper's docker.sock-backed
+    container-restart control plane -- that's the whole "infra control"
+    domain the finding named."""
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=RED_ACTION_HEADERS
+        )
+
+    assert response.status_code == 403
+    mock_start.assert_not_called()
 
 
 def test_advisor_endpoint_delegates_to_ask_advisor(app):
@@ -164,10 +251,23 @@ def test_advisor_endpoint_delegates_to_ask_advisor(app):
     assert response.get_json() == {"answer": "block it"}
 
 
+_ACTION_ROUTE_HEADERS = {
+    "/api/red-action": RED_ACTION_HEADERS,
+    "/api/blue-action": BLUE_ACTION_HEADERS,
+    "/api/advisor": {},
+}
+
+
 @pytest.mark.parametrize("route", ["/api/red-action", "/api/blue-action", "/api/advisor"])
 @pytest.mark.parametrize("raw_body", ["null", "[]", '"x"', "42"])
 def test_action_routes_reject_non_dict_json_body(app, route, raw_body):
-    response = app.test_client().post(route, data=raw_body, content_type="application/json", auth=AUTH)
+    response = app.test_client().post(
+        route,
+        data=raw_body,
+        content_type="application/json",
+        auth=AUTH,
+        headers=_ACTION_ROUTE_HEADERS[route],
+    )
     assert response.status_code == 400
 
 

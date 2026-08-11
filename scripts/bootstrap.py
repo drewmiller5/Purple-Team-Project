@@ -29,6 +29,9 @@ GENERATED_KEYS = (
     "INTERNAL_ACTION_TOKEN",
     "ROUND_HELPER_TOKEN",
     "DASHBOARD_AUTH_TOKEN",
+    "DASHBOARD_RED_ACTION_TOKEN",
+    "DASHBOARD_BLUE_ACTION_TOKEN",
+    "DASHBOARD_INFRA_ACTION_TOKEN",
     "WAZUH_INDEXER_PASSWORD",
     "WAZUH_DASHBOARD_PASSWORD",
     "WAZUH_API_PASSWORD",
@@ -162,6 +165,12 @@ Round Control Dashboard (start/stop rounds, clear flags)
   http://localhost:8080
   operator / {env.get("DASHBOARD_AUTH_TOKEN", "<missing>")}
 
+  H55: viewing the dashboard above is not enough to act -- each action
+  form/button also needs its own scoped token pasted into its own field:
+    Red action token:   {env.get("DASHBOARD_RED_ACTION_TOKEN", "<missing>")}
+    Blue action token:  {env.get("DASHBOARD_BLUE_ACTION_TOKEN", "<missing>")}
+    Infra token (start round): {env.get("DASHBOARD_INFRA_ACTION_TOKEN", "<missing>")}
+
 Wazuh Dashboard (SIEM UI -- browser will warn on the self-signed cert)
   https://localhost:443
   admin / {env.get("WAZUH_INDEXER_PASSWORD", "<missing>")}
@@ -214,6 +223,9 @@ def bootstrap_env(run=subprocess.run) -> dict:
         "INTERNAL_ACTION_TOKEN": generate_hex_secret(),
         "ROUND_HELPER_TOKEN": generate_hex_secret(),
         "DASHBOARD_AUTH_TOKEN": generate_hex_secret(),
+        "DASHBOARD_RED_ACTION_TOKEN": generate_hex_secret(),
+        "DASHBOARD_BLUE_ACTION_TOKEN": generate_hex_secret(),
+        "DASHBOARD_INFRA_ACTION_TOKEN": generate_hex_secret(),
         "WAZUH_INDEXER_PASSWORD": generate_hex_secret(24),
         "WAZUH_DASHBOARD_PASSWORD": generate_hex_secret(24),
         "WAZUH_API_PASSWORD": generate_complex_password(),

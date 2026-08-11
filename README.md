@@ -40,9 +40,10 @@ internal defensive endpoints against `blue_agent` and Wazuh's active-response
 scripts; no default, the stack fails closed without it), `ROUND_HELPER_TOKEN`
 set (round_helper's own dedicated secret for its docker.sock-backed
 container-restart control plane, distinct from `INTERNAL_ACTION_TOKEN`; also
-no default), and `DASHBOARD_AUTH_TOKEN` set (password for the dashboard's
-HTTP Basic Auth, username hardcoded as `operator`; also no default). Copy
-`.env.example` to
+no default), `DASHBOARD_AUTH_TOKEN` set (password for the dashboard's HTTP
+Basic Auth, username hardcoded as `operator`; also no default), and 3 more
+dashboard tokens described in the Dashboard section below (also no default).
+Copy `.env.example` to
 `.env` and fill in random values, or export them directly:
 
     cp .env.example .env   # then edit .env
@@ -51,10 +52,21 @@ HTTP Basic Auth, username hardcoded as `operator`; also no default). Copy
 ### Dashboard (host port 8080)
 
 The human-operable dashboard is served on `http://localhost:8080`, behind
-reusable plaintext HTTP Basic Auth (no TLS). That's an acceptable trade-off
-for a local, single-operator lab -- it grants real attack-firing and
-container-restart capability -- but the port should never be bound to a
-routable or non-localhost interface.
+reusable plaintext HTTP Basic Auth (no TLS) -- `DASHBOARD_AUTH_TOKEN`. That's
+an acceptable trade-off for a local, single-operator lab, but the port should
+never be bound to a routable or non-localhost interface.
+
+**H55: separation of duties.** `DASHBOARD_AUTH_TOKEN` only grants viewing the
+dashboard, not acting through it. Firing a red action, firing a blue action,
+and starting a round (which reaches `round_helper`'s docker.sock-backed
+container-restart control plane) are 3 separate privilege domains, each
+gated by its own token -- `DASHBOARD_RED_ACTION_TOKEN`,
+`DASHBOARD_BLUE_ACTION_TOKEN`, `DASHBOARD_INFRA_ACTION_TOKEN` -- pasted once
+into that action's own field on the page (never cached by the browser like
+the Basic Auth login is). One leaked token grants at most one capability,
+never all three or the dashboard itself. `scripts/bootstrap.py` generates
+all 4 tokens automatically and prints them together in the quickstart
+credentials block.
 
 ### Target app (host port 5000) -- the attack surface itself
 

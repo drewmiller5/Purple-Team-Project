@@ -240,6 +240,7 @@ PAGE = """
   <div class="round-controls">
     <button id="btn-clear">Clear Flags</button>
     <button id="btn-stop" class="ctrl-stop">Stop Round</button>
+    <input type="password" id="infra-action-token" placeholder="Infra token" title="Required to start a round -- separate from the red/blue action tokens and the dashboard login (H55)." style="width: 9em;" required autocomplete="off">
     <button id="btn-start" class="ctrl-go">Start Round</button>
   </div>
   <span id="round-badge" class="badge idle"><span class="dot"></span>loading&hellip;</span>
@@ -267,6 +268,7 @@ PAGE = """
               <option value="command_injection">Command injection (/admin/diagnostics)</option>
             </select>
           </label>
+          <label>Red action token <input type="password" id="red-action-token" required autocomplete="off"></label>
           <button type="submit">Fire</button>
         </form>
       </section>
@@ -290,6 +292,7 @@ PAGE = """
           </select>
         </label>
         <label>Target value <input type="text" name="target" required></label>
+        <label>Blue action token <input type="password" id="blue-action-token" required autocomplete="off"></label>
         <button type="submit">Defend</button>
       </form>
     </section>
@@ -550,11 +553,17 @@ for (const btn of document.querySelectorAll('nav.tabs button')) {
 
 // HTTP Basic Auth is browser-native: once the browser prompts and the
 // operator enters credentials for this origin, it caches and resends them
-// automatically on every fetch() below. No Authorization header handling
-// needed here.
+// automatically on every fetch() below -- that only proves "may view this
+// dashboard", though. H55: firing a red/blue action or starting a round
+// each additionally need their own scoped X-Action-Token header, read
+// from the matching password field at the moment of the call (never
+// cached by the browser, never sent with any other request).
 document.getElementById('btn-clear').addEventListener('click', () => fetch('/api/round/clear', { method: 'POST' }).then(tick));
 document.getElementById('btn-stop').addEventListener('click', () => fetch('/api/round/stop', { method: 'POST' }).then(tick));
-document.getElementById('btn-start').addEventListener('click', () => fetch('/api/round/start', { method: 'POST' }).then(tick));
+document.getElementById('btn-start').addEventListener('click', () => fetch('/api/round/start', {
+  method: 'POST',
+  headers: { 'X-Action-Token': document.getElementById('infra-action-token').value },
+}).then(tick));
 
 function showToast(message, ok) {
   const toast = document.getElementById('found-it-toast');
@@ -567,7 +576,11 @@ document.getElementById('red-template-form').addEventListener('submit', async (e
   ev.preventDefault();
   const template_name = new FormData(ev.target).get('template_name');
   const res = await fetch('/api/red-action', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Action-Token': document.getElementById('red-action-token').value,
+    },
     body: JSON.stringify({ template_name }),
   });
   const data = await res.json();
@@ -579,7 +592,11 @@ document.getElementById('blue-action-form').addEventListener('submit', async (ev
   ev.preventDefault();
   const fd = new FormData(ev.target);
   const res = await fetch('/api/blue-action', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Action-Token': document.getElementById('blue-action-token').value,
+    },
     body: JSON.stringify({ action: fd.get('action'), target: fd.get('target') }),
   });
   const data = await res.json();

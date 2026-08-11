@@ -76,6 +76,16 @@ def create_app() -> Flask:
     app.config["OLLAMA_MODEL"] = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
     app.config["ADVISOR_LOG_PATH"] = os.environ.get("ADVISOR_LOG_PATH", "/app/referee_logs/advisor_log.jsonl")
     app.config["DASHBOARD_AUTH_TOKEN"] = os.environ.get("DASHBOARD_AUTH_TOKEN")
+    # H55: DASHBOARD_AUTH_TOKEN only proves "may view this dashboard" --
+    # it used to also be the sole gate on firing a red action, firing a
+    # blue action, and restarting the round's containers via
+    # round_helper's docker.sock access, three separate privilege
+    # domains behind one secret. Each now needs its own scoped token in
+    # addition to DASHBOARD_AUTH_TOKEN, so a single leaked secret grants
+    # at most one domain, never all three.
+    app.config["DASHBOARD_RED_ACTION_TOKEN"] = os.environ.get("DASHBOARD_RED_ACTION_TOKEN")
+    app.config["DASHBOARD_BLUE_ACTION_TOKEN"] = os.environ.get("DASHBOARD_BLUE_ACTION_TOKEN")
+    app.config["DASHBOARD_INFRA_ACTION_TOKEN"] = os.environ.get("DASHBOARD_INFRA_ACTION_TOKEN")
     MAX_EVENTS, MAX_ASSESSMENTS = 300, 100
     # H69: reasoning and heartbeat events add no ledger value (heartbeats are
     # collapsed client-side; reasoning is logged for audit but isn't an
@@ -102,6 +112,18 @@ def create_app() -> Flask:
         supplied = auth.password if auth and auth.username == "operator" else None
         if not (expected and supplied and hmac.compare_digest(expected, supplied)):
             return "", 401, {"WWW-Authenticate": 'Basic realm="Purple Team Dashboard"'}
+
+    def _require_action_token(config_key):
+        # H55: fail-closed the same way the general auth gate does --
+        # an unset configured token or a missing/wrong header both deny.
+        # 403, not 401: the caller already passed the general dashboard
+        # auth (else before_request would have stopped them at 401) but
+        # lacks this specific domain's capability.
+        expected = app.config.get(config_key)
+        supplied = request.headers.get("X-Action-Token")
+        if not (expected and supplied and hmac.compare_digest(expected, supplied)):
+            return jsonify({"error": "missing or invalid action token for this capability"}), 403
+        return None
 
     @app.route("/api/state")
     def api_state():
@@ -142,10 +164,16 @@ def create_app() -> Flask:
 
     @app.route("/api/round/start", methods=["POST"])
     def round_start():
+        denied = _require_action_token("DASHBOARD_INFRA_ACTION_TOKEN")
+        if denied:
+            return denied
         return jsonify(start_round(app.config["ROUND_HELPER_URL"], app.config["ROUND_HELPER_TOKEN"]))
 
     @app.route("/api/red-action", methods=["POST"])
     def red_action():
+        denied = _require_action_token("DASHBOARD_RED_ACTION_TOKEN")
+        if denied:
+            return denied
         # or {} alone would mask a falsy-but-non-dict body (JSON `null`/`[]`)
         # as an empty dict; only treat a truly empty request body that way.
         body = request.get_json(force=True, silent=True) if request.get_data() else {}
@@ -161,6 +189,9 @@ def create_app() -> Flask:
 
     @app.route("/api/blue-action", methods=["POST"])
     def blue_action():
+        denied = _require_action_token("DASHBOARD_BLUE_ACTION_TOKEN")
+        if denied:
+            return denied
         body = request.get_json(force=True, silent=True) if request.get_data() else {}
         if not isinstance(body, dict):
             return jsonify({"error": "request body must be a JSON object"}), 400

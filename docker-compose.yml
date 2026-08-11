@@ -238,6 +238,14 @@ services:
       - INTERNAL_ACTION_TOKEN=${INTERNAL_ACTION_TOKEN:?set INTERNAL_ACTION_TOKEN before starting the lab}
       - ROUND_HELPER_TOKEN=${ROUND_HELPER_TOKEN:?set ROUND_HELPER_TOKEN before starting the lab}
       - DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:?set DASHBOARD_AUTH_TOKEN before starting the lab}
+      # H55: separate the dashboard's 3 privilege domains -- red action,
+      # blue action, and infra control (round restart, via round_helper's
+      # docker.sock access) -- from DASHBOARD_AUTH_TOKEN (which only
+      # proves "may view this dashboard") and from each other, so one
+      # leaked token grants at most one capability.
+      - DASHBOARD_RED_ACTION_TOKEN=${DASHBOARD_RED_ACTION_TOKEN:?set DASHBOARD_RED_ACTION_TOKEN before starting the lab}
+      - DASHBOARD_BLUE_ACTION_TOKEN=${DASHBOARD_BLUE_ACTION_TOKEN:?set DASHBOARD_BLUE_ACTION_TOKEN before starting the lab}
+      - DASHBOARD_INFRA_ACTION_TOKEN=${DASHBOARD_INFRA_ACTION_TOKEN:?set DASHBOARD_INFRA_ACTION_TOKEN before starting the lab}
       - ROUND_HELPER_URL=http://round_helper:8090
       - OLLAMA_HOST=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
