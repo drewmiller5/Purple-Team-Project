@@ -125,6 +125,158 @@ def test_diagnostics_timeout_cleanup_survives_process_already_gone(tmp_path):
     assert "error" in body
 
 
+def _write_fake_stat(proc_dir, pid, ppid, comm="proc"):
+    """Write a real /proc/<pid>/stat-shaped file (pid, (comm), state,
+    ppid, ... per `man proc`) so _descendant_pids can be tested against
+    an actual parent-child tree on disk, not a mocked-open() shim."""
+    pid_dir = proc_dir / str(pid)
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    (pid_dir / "stat").write_text(f"{pid} ({comm}) S {ppid} {pid} {pid} 0 -1 0\n")
+
+
+def test_descendant_pids_finds_setsid_escaped_grandchildren(tmp_path):
+    """H67: setsid() gives a process a new session/process-group id but
+    does NOT change its PPid -- so a self-daemonizing injected command
+    (`setsid sleep 600 &`) escapes os.killpg's process-GROUP kill while
+    remaining fully visible via the real parent-child tree in /proc.
+    Walking that tree (not process-group membership) must still find it,
+    and any further descendants spawned underneath it too."""
+    from target.routes.diagnostics import _descendant_pids
+
+    proc_dir = tmp_path / "proc"
+    _write_fake_stat(proc_dir, pid=100, ppid=1, comm="sh")
+    _write_fake_stat(proc_dir, pid=101, ppid=100, comm="ping")
+    _write_fake_stat(proc_dir, pid=102, ppid=100, comm="setsid")
+    _write_fake_stat(proc_dir, pid=103, ppid=102, comm="sleep")
+    _write_fake_stat(proc_dir, pid=999, ppid=1, comm="unrelated")
+
+    found = _descendant_pids(100, proc_dir=str(proc_dir))
+
+    assert set(found) == {101, 102, 103}
+
+
+def test_descendant_pids_missing_proc_dir_returns_empty(tmp_path):
+    """Non-Linux POSIX hosts (e.g. macOS) have no /proc at all -- must
+    degrade to an empty list, not raise, so the pgid kill still runs."""
+    from target.routes.diagnostics import _descendant_pids
+
+    assert _descendant_pids(100, proc_dir=str(tmp_path / "does-not-exist")) == []
+
+
+def test_descendant_pids_skips_malformed_stat_file(tmp_path):
+    """Reviewer-flagged gap: a stat file read back truncated/malformed
+    mid-exit (procfs race) must be skipped, not raise ValueError/
+    IndexError out of _descendant_pids and crash the whole timeout
+    handler over one unparseable pid."""
+    from target.routes.diagnostics import _descendant_pids
+
+    proc_dir = tmp_path / "proc"
+    _write_fake_stat(proc_dir, pid=100, ppid=1, comm="sh")
+    _write_fake_stat(proc_dir, pid=101, ppid=100, comm="ping")
+    malformed_dir = proc_dir / "102"
+    malformed_dir.mkdir(parents=True)
+    (malformed_dir / "stat").write_text("truncated garbage, no closing paren")
+
+    found = _descendant_pids(100, proc_dir=str(proc_dir))
+
+    assert found == [101]
+
+
+def test_diagnostics_timeout_kills_setsid_escaped_descendants(tmp_path):
+    """H67: the process-group kill alone misses a setsid-escaped
+    descendant. The route must also walk and individually SIGKILL the
+    real descendant tree so a detached grandchild can't outlive the
+    response."""
+    client = _make_client(tmp_path)
+    client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+
+    sentinel_sigkill = object()
+    mock_process = _mock_timed_out_process(pid=12345)
+    with (
+        patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process),
+        patch("target.routes.diagnostics.os.getpgid", return_value=999, create=True),
+        patch("target.routes.diagnostics.os.killpg", create=True),
+        patch("target.routes.diagnostics.os.kill", create=True) as mock_kill,
+        patch(
+            "target.routes.diagnostics._descendant_pids",
+            return_value=[54321, 54322],
+        ) as mock_descendants,
+        patch("target.routes.diagnostics.os.name", "posix"),
+        patch("target.routes.diagnostics.signal.SIGKILL", sentinel_sigkill, create=True),
+    ):
+        response = client.post(
+            "/admin/diagnostics",
+            data={"host": "127.0.0.1; setsid sleep 600 &"},
+        )
+
+    assert response.status_code == 504
+    mock_descendants.assert_called_once_with(12345)
+    mock_kill.assert_any_call(54321, sentinel_sigkill)
+    mock_kill.assert_any_call(54322, sentinel_sigkill)
+
+
+def test_diagnostics_timeout_descendant_kill_survives_already_gone_pid(tmp_path):
+    """A descendant found via /proc can still exit/get reaped between the
+    listing and the kill -- os.kill's ProcessLookupError/PermissionError
+    per-pid must not propagate past the intended 504 response."""
+    client = _make_client(tmp_path)
+    client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+
+    mock_process = _mock_timed_out_process(pid=12345)
+    with (
+        patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process),
+        patch("target.routes.diagnostics.os.getpgid", return_value=999, create=True),
+        patch("target.routes.diagnostics.os.killpg", create=True),
+        patch(
+            "target.routes.diagnostics.os.kill",
+            side_effect=ProcessLookupError,
+            create=True,
+        ),
+        patch(
+            "target.routes.diagnostics._descendant_pids",
+            return_value=[54321],
+        ),
+        patch("target.routes.diagnostics.os.name", "posix"),
+        patch("target.routes.diagnostics.signal.SIGKILL", object(), create=True),
+    ):
+        response = client.post(
+            "/admin/diagnostics",
+            data={"host": "127.0.0.1; setsid sleep 600 &"},
+        )
+
+    assert response.status_code == 504
+    body = response.get_json()
+    assert body is not None
+    assert "error" in body
+
+
+def test_diagnostics_timeout_non_posix_kill_survives_process_already_gone(tmp_path):
+    """Reviewer-flagged regression: the non-POSIX (os.name != 'posix')
+    branch calls process.kill() directly. If the process already
+    exited/was reaped between the timeout firing and the cleanup
+    running, that raises ProcessLookupError/PermissionError -- must not
+    propagate past the intended 504 response, same guarantee the POSIX
+    branch already has."""
+    client = _make_client(tmp_path)
+    client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+
+    mock_process = _mock_timed_out_process(pid=12345)
+    mock_process.kill.side_effect = ProcessLookupError
+    with (
+        patch("target.routes.diagnostics.subprocess.Popen", return_value=mock_process),
+        patch("target.routes.diagnostics.os.name", "nt"),
+    ):
+        response = client.post(
+            "/admin/diagnostics",
+            data={"host": "127.0.0.1; sleep 600"},
+        )
+
+    assert response.status_code == 504
+    body = response.get_json()
+    assert body is not None
+    assert "error" in body
+
+
 def test_diagnostics_timeout_kills_whole_process_group_not_just_child(tmp_path):
     """H58: shell=True means timeout must kill the process GROUP (via
     os.killpg on the group id), not just process.kill() on the immediate
