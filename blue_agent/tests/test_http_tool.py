@@ -10,6 +10,16 @@ from target.app import create_app
 @pytest.fixture
 def live_target(tmp_path, monkeypatch):
     monkeypatch.setenv("INTERNAL_ACTION_TOKEN", "test-internal-action-token")
+    # H68: block_ip() now refuses (503) unless _protected_source_ips()
+    # reports a fully-resolved allowlist. This dev box has no Docker DNS
+    # for "target"/"wazuh.manager"/etc., so the real function would
+    # always report unresolved here -- pin it resolved so this test
+    # still exercises the live HTTP round-trip + iptables-missing
+    # handling it's actually about, not H68's own gating (covered by
+    # dedicated unit tests in target/tests/test_internal_routes.py).
+    monkeypatch.setattr(
+        "target.routes.internal._protected_source_ips", lambda: (set(), True)
+    )
     app = create_app(
         db_path=str(tmp_path / "test.db"),
         log_path=str(tmp_path / "requests.jsonl"),

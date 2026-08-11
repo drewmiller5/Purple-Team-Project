@@ -139,7 +139,9 @@ def test_block_ip_rejects_invalid_ip_format(tmp_path):
 
 def test_block_ip_runs_iptables_drop_for_valid_ip(tmp_path):
     client = _make_client(tmp_path)
-    with patch("target.routes.internal.subprocess.run") as mock_run:
+    with patch(
+        "target.routes.internal._protected_source_ips", return_value=(set(), True)
+    ), patch("target.routes.internal.subprocess.run") as mock_run:
         # Configure mock to report success (returncode=0).
         mock_run.return_value.returncode = 0
         response = _internal_post(client, "/internal/block-ip", {"source_ip": "172.19.0.5"})
@@ -153,7 +155,9 @@ def test_block_ip_runs_iptables_drop_for_valid_ip(tmp_path):
 
 def test_block_ip_returns_500_when_iptables_fails(tmp_path):
     client = _make_client(tmp_path)
-    with patch("target.routes.internal.subprocess.run") as mock_run:
+    with patch(
+        "target.routes.internal._protected_source_ips", return_value=(set(), True)
+    ), patch("target.routes.internal.subprocess.run") as mock_run:
         # Configure mock to report failure (returncode=1) on first call.
         mock_run.return_value.returncode = 1
         response = _internal_post(client, "/internal/block-ip", {"source_ip": "172.19.0.5"})
@@ -164,12 +168,44 @@ def test_block_ip_returns_500_when_iptables_fails(tmp_path):
     assert response_data["blocked_ip"] == "172.19.0.5"
 
 
+def test_block_ip_returns_503_when_protected_ips_not_fully_resolved(tmp_path):
+    """H68: _protected_source_ips() reporting an incomplete allowlist (a
+    still-unresolved DNS/route startup race) must not silently let
+    block_ip() act on it -- an iptables DROP is real and irreversible
+    via any API in this app. Refuse with 503 until resolution has
+    succeeded at least once instead."""
+    client = _make_client(tmp_path)
+
+    with patch(
+        "target.routes.internal._protected_source_ips",
+        return_value=(set(), False),
+    ), patch("target.routes.internal.subprocess.run") as mock_run:
+        response = _internal_post(client, "/internal/block-ip", {"source_ip": "198.51.100.9"})
+
+    assert response.status_code == 503
+    mock_run.assert_not_called()
+
+
+def test_block_ip_proceeds_once_protected_ips_are_fully_resolved(tmp_path):
+    client = _make_client(tmp_path)
+
+    with patch(
+        "target.routes.internal._protected_source_ips",
+        return_value=(set(), True),
+    ), patch("target.routes.internal.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        response = _internal_post(client, "/internal/block-ip", {"source_ip": "198.51.100.9"})
+
+    assert response.status_code == 200
+    mock_run.assert_called()
+
+
 def test_block_ip_rejects_resolved_infrastructure_addresses(tmp_path):
     client = _make_client(tmp_path)
 
     with patch(
         "target.routes.internal._protected_source_ips",
-        return_value={"172.19.0.1", "172.19.0.2", "172.19.0.3", "172.19.0.4"},
+        return_value=({"172.19.0.1", "172.19.0.2", "172.19.0.3", "172.19.0.4"}, True),
     ), patch("target.routes.internal.subprocess.run") as mock_run:
         for source_ip in ("172.19.0.1", "172.19.0.2", "172.19.0.3", "172.19.0.4"):
             response = _internal_post(client, "/internal/block-ip", {"source_ip": source_ip})
@@ -233,10 +269,12 @@ def test_protected_source_ips_caches_dns_lookups(tmp_path):
     internal._protected_source_ips.cache_clear()
     try:
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9") as mock_lookup:
-            first = internal._protected_source_ips()
-            second = internal._protected_source_ips()
+            first, first_resolved = internal._protected_source_ips()
+            second, second_resolved = internal._protected_source_ips()
 
         assert first == second
+        assert first_resolved is True
+        assert second_resolved is True
         # 4 hostnames resolved on the first call only; the second call must
         # not trigger any additional socket.gethostbyname calls.
         assert mock_lookup.call_count == 4
@@ -257,12 +295,16 @@ def test_protected_source_ips_does_not_cache_a_degraded_result_after_dns_failure
     internal._protected_source_ips.cache_clear()
     try:
         with patch("target.routes.internal.socket.gethostbyname", side_effect=socket.gaierror):
-            degraded = internal._protected_source_ips()
+            degraded, degraded_resolved = internal._protected_source_ips()
         assert "10.0.0.9" not in degraded
+        # H68: an unresolved DNS lookup means block_ip() must refuse to
+        # act rather than trust this incomplete snapshot.
+        assert degraded_resolved is False
 
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9") as mock_lookup:
-            recovered = internal._protected_source_ips()
+            recovered, recovered_resolved = internal._protected_source_ips()
         assert "10.0.0.9" in recovered
+        assert recovered_resolved is True
         # A degraded result must not have been cached -- this second call
         # has to actually retry DNS, not skip straight to a stale result.
         assert mock_lookup.call_count == 4
@@ -290,14 +332,16 @@ def test_protected_source_ips_does_not_cache_a_missing_default_route(tmp_path):
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
             "target.routes.internal.open", return_value=io.StringIO(no_default_route)
         ):
-            degraded = internal._protected_source_ips()
+            degraded, degraded_resolved = internal._protected_source_ips()
         assert "192.168.0.1" not in degraded
+        assert degraded_resolved is False
 
         with patch(
             "target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"
         ) as mock_lookup, patch("target.routes.internal.open", return_value=io.StringIO(has_default_route)):
-            recovered = internal._protected_source_ips()
+            recovered, recovered_resolved = internal._protected_source_ips()
         assert "192.168.0.1" in recovered
+        assert recovered_resolved is True
         # A degraded result must not have been cached -- this second call
         # has to actually re-run DNS (and re-read the route table), not
         # skip straight to a stale result.
@@ -322,14 +366,16 @@ def test_protected_source_ips_does_not_cache_after_a_transient_route_read_error(
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
             "target.routes.internal.open", side_effect=PermissionError
         ):
-            degraded = internal._protected_source_ips()
+            degraded, degraded_resolved = internal._protected_source_ips()
         assert "192.168.0.1" not in degraded
+        assert degraded_resolved is False
 
         with patch(
             "target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"
         ) as mock_lookup, patch("target.routes.internal.open", return_value=io.StringIO(has_default_route)):
-            recovered = internal._protected_source_ips()
+            recovered, recovered_resolved = internal._protected_source_ips()
         assert "192.168.0.1" in recovered
+        assert recovered_resolved is True
         assert mock_lookup.call_count == 4
     finally:
         internal._protected_source_ips.cache_clear()
@@ -352,7 +398,8 @@ def test_protected_source_ips_skips_a_malformed_default_route_line_and_checks_la
         with patch("target.routes.internal.socket.gethostbyname", return_value="10.0.0.9"), patch(
             "target.routes.internal.open", return_value=io.StringIO(first_line_malformed)
         ):
-            result = internal._protected_source_ips()
+            result, resolved = internal._protected_source_ips()
         assert "192.168.0.1" in result
+        assert resolved is True
     finally:
         internal._protected_source_ips.cache_clear()

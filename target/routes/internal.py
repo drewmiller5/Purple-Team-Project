@@ -19,7 +19,8 @@ def _is_authorized_internal_action():
 
 
 def _protected_source_ips():
-    """Return the target and essential lab peers that must never be blocked.
+    """Return (protected_ips, fully_resolved): the target/lab-peer IPs
+    that must never be blocked, and whether this snapshot is complete.
 
     H61: DNS/file-I/O lookups here are cheap-but-not-free and don't change
     within a process's lifetime, so compute once and cache rather than
@@ -29,9 +30,15 @@ def _protected_source_ips():
     life -- this is a security-relevant allowlist, so only cache a fully-
     resolved result; a degraded one retries on the next call, matching
     the old per-request behavior's ability to self-correct.
+
+    H68: caching controls what gets *remembered*, not what a single
+    degraded call is trusted to *act on* -- block_ip() needs to know
+    whether THIS result (or an earlier cached one) was ever actually
+    complete, so it can refuse to act on a known-incomplete allowlist
+    during a startup race instead of silently trusting it.
     """
     if _protected_source_ips.cache is not None:
-        return _protected_source_ips.cache
+        return _protected_source_ips.cache, True
 
     protected = {"127.0.0.1"}
     resolved_all = True
@@ -81,9 +88,10 @@ def _protected_source_ips():
         # that's missing the gateway protection.
         route_resolved = False
 
-    if resolved_all and route_resolved:
+    fully_resolved = resolved_all and route_resolved
+    if fully_resolved:
         _protected_source_ips.cache = protected
-    return protected
+    return protected, fully_resolved
 
 
 _protected_source_ips.cache = None
@@ -159,7 +167,18 @@ def block_ip():
     except ValueError:
         return jsonify({"error": "source_ip is required and must be a valid IPv4 address"}), 400
 
-    if source_ip in _protected_source_ips() or ipaddress.IPv4Address(source_ip).is_loopback:
+    protected_ips, fully_resolved = _protected_source_ips()
+    if not fully_resolved:
+        # H68: the allowlist itself is a still-unresolved snapshot (a
+        # DNS/route startup race) -- an iptables DROP is real and not
+        # reversible via any API in this app, so refuse to act on a
+        # known-incomplete allowlist rather than risk blocking real
+        # infrastructure. Self-corrects: the next call retries.
+        return jsonify({
+            "error": "protected-IP allowlist not yet fully resolved; refusing to block until startup completes"
+        }), 503
+
+    if source_ip in protected_ips or ipaddress.IPv4Address(source_ip).is_loopback:
         return jsonify({"error": "source_ip is protected infrastructure"}), 403
 
     # List-form subprocess.run (never shell=True) -- this is a real,
