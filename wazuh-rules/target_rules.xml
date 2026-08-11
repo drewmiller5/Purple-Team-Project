@@ -112,13 +112,23 @@
     <field name="path" type="pcre2">^/search$</field>
     <!-- Task 19 (H5/H40): broadened the OR/UNION alternatives to catch more
          semantically-equivalent tautology payloads (numeric and
-         quoted-string OR comparisons, UNION ALL SELECT), and narrowed the
-         bare SQL-comment-marker alternative (previously matched ANY value
-         containing two consecutive hyphens anywhere, e.g. a date range or
-         em-dash) to only match when it's followed by whitespace or sits at
-         the end of the value, which is the shape a real SQLi comment
-         terminator actually takes, per H40's own suggested fix. -->
-    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'?\d+'?\s*=\s*'?\d+|'\s*OR\s*'[^']*'\s*=\s*'[^']*'|UNION\s+(ALL\s+)?SELECT|--(\s|$))</field>
+         quoted-string OR comparisons, UNION ALL SELECT). Fix round 2: dual
+         review found the original narrowing (a SQL comment marker
+         followed by whitespace or end-of-value) still false-positived on
+         the far more common spaced em-dash convention in prose (e.g. a
+         phrase with a dash set off by spaces on both sides), AND lost
+         detection against target's real sqlite3 backend, which (unlike
+         MySQL) doesn't require trailing whitespace after a comment marker
+         to start a comment, so a bare-comment payload with no trailing
+         space and no OR/UNION keyword slipped through both the original
+         match and the round-1 narrowing. The real signal isn't whitespace
+         at all; it's whether the comment marker sits immediately after a
+         quote or semicolon (breaking out of a string/statement, the shape
+         a real SQLi terminator takes) or at the very end of the value (an
+         attacker's payload is typically the last thing in the field).
+         Ordinary prose essentially never places a quote or semicolon
+         directly adjacent to a comment marker with nothing between. -->
+    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'?\d+'?\s*=\s*'?\d+|'\s*OR\s*'[^']*'\s*=\s*'[^']*'|UNION\s+(ALL\s+)?SELECT|('|;)--|--$)</field>
     <description>SQL injection attempt on /search (Sigma: 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f)</description>
     <mitre>
       <id>T1190</id>
