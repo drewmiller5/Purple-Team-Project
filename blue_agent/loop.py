@@ -38,12 +38,13 @@ that something else already handled it:
   /documents/<id>) are low-severity base events that fire on every
   ordinary attempt by design, including entirely legitimate ones -- a
   lone alert of either kind is not evidence of an attack. Only escalate
-  (lock_account for repeated login attempts, block_ip for repeated
-  document probing) once you see a real pattern: several of these alerts
-  in a short window from the same source IP or against the same account.
+  once you see a real pattern: roughly 5 or more rule-100103 alerts
+  against the same account within about 2 minutes (lock_account), or
+  roughly 5 or more rule-100105 alerts from the same source IP within
+  about 60 seconds (block_ip).
 
 Use recall_past_findings at the start to see what you've already decided
-in this run, and to avoid re-escalating a source you've already acted on.
+in this run, and to avoid re-escalating a target you've already acted on.
 On each turn, reason briefly, then call at most one tool (or none, if
 holding is genuinely the right call given the evidence so far).
 
