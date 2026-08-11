@@ -110,7 +110,15 @@
   <rule id="100101" level="12">
     <if_sid>100100</if_sid>
     <field name="path" type="pcre2">^/search$</field>
-    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'1'='1|'\s*OR\s*1=1|--|UNION\s+SELECT)</field>
+    <!-- Task 19 (H5/H40): broadened the OR/UNION alternatives to catch more
+         semantically-equivalent tautology payloads (numeric and
+         quoted-string OR comparisons, UNION ALL SELECT), and narrowed the
+         bare SQL-comment-marker alternative (previously matched ANY value
+         containing two consecutive hyphens anywhere, e.g. a date range or
+         em-dash) to only match when it's followed by whitespace or sits at
+         the end of the value, which is the shape a real SQLi comment
+         terminator actually takes, per H40's own suggested fix. -->
+    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'?\d+'?\s*=\s*'?\d+|'\s*OR\s*'[^']*'\s*=\s*'[^']*'|UNION\s+(ALL\s+)?SELECT|--(\s|$))</field>
     <description>SQL injection attempt on /search (Sigma: 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f)</description>
     <mitre>
       <id>T1190</id>
@@ -123,7 +131,10 @@
     <if_sid>100100</if_sid>
     <field name="path" type="pcre2">^/admin/diagnostics$</field>
     <field name="method" type="pcre2">^POST$</field>
-    <field name="form_params.host" type="pcre2">(;|\||&amp;&amp;|\$\(|`)</field>
+    <!-- Task 19 (H4): added \n/\r so a newline-separated payload
+         (8.8.8.8%0Aid) still matches; the prior alternation had no
+         line-break alternative, so this bypassed detection entirely. -->
+    <field name="form_params.host" type="pcre2">(;|\||&amp;&amp;|\$\(|`|\n|\r)</field>
     <description>OS command injection attempt on /admin/diagnostics (Sigma: 7a8b9c0d-2e3f-4a5b-6c7d-8e9f0a1b2c3d)</description>
     <mitre>
       <id>T1059</id>
@@ -142,7 +153,13 @@
     <if_sid>100100</if_sid>
     <field name="path" type="pcre2">^/admin/login$</field>
     <field name="method" type="pcre2">^POST$</field>
-    <field name="status_code" type="pcre2">^200$</field>
+    <!-- Task 19 (H39): status_code==200 was a no-op; target's /admin/login
+         returns 200 for both a successful and a failed login, so this
+         condition can't actually distinguish the two despite the rule's
+         name implying it counts real attempts either way. Dropped rather
+         than kept as dead weight; the rule still does its real job (base
+         event for bruteforce-guard.sh's own counting) via path/method/
+         username alone. -->
     <field name="form_params.username" type="pcre2">.*</field>
     <description>POST to /admin/login with username parameter present</description>
     <options>no_full_log</options>
