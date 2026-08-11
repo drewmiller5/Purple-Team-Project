@@ -130,8 +130,38 @@
          prose that closes a quoted phrase immediately before a spaced
          em-dash aside (a quote, a space, then the marker); narrower and
          less common than the date-range/general-em-dash cases already fixed,
-         so left as-is rather than over-engineering further. -->
-    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'?\d+'?\s*=\s*'?\d+|'\s*OR\s*'[^']*'\s*=\s*'[^']*'|UNION\s+(ALL\s+)?SELECT|('|;)\s*--|--$)</field>
+         so left as-is rather than over-engineering further.
+         H72 (2026-08-11): the tautology alternatives only covered `=`
+         comparisons — non-`=` operator variants (OR 1<2, OR 2>1, OR 1<=1)
+         and bare boolean-literal tautologies (OR TRUE) matched nothing.
+         Broadened the comparison to a full operator class
+         (=|<=|>=|<>|!=|<|>) on both the numeric and quoted-string forms,
+         and added a standalone TRUE/FALSE literal alternative.
+         Live-verification note: `<`/`>` are written as PCRE2 hex escapes
+         (\x3c/\x3e), not XML entities (&lt;/&gt;) — confirmed live via
+         wazuh-logtest that this Wazuh version's rule parser does NOT
+         XML-decode entities inside a `type="pcre2"` field's regex text
+         before compiling it. An `&lt;` in the pattern was silently
+         matching the literal 4-character string "&lt;" in the input, not
+         a real `<` character — a genuinely non-obvious Wazuh-version-
+         specific gotcha, not a hypothetical concern; the first version of
+         this fix shipped with that exact bug and never actually matched
+         any of its new alternatives until this was caught by live-testing
+         every one of them individually. \xNN hex escapes need no XML
+         escaping at all and are resolved correctly at PCRE2 compile time
+         regardless of how the surrounding XML is parsed.
+         Security-review correction: an earlier version of this note
+         contrasted pcre2 fields against `<description>` text, claiming
+         the latter "decodes normally" — checked live against real
+         alerts.json output for the existing 100105/100106 rules (which
+         use &lt;/&gt; entities in their own descriptions) and that's
+         false: the literal, undecoded entity text lands in the alert
+         JSON there too. No detection impact (description text never
+         drives matching, it's just what an analyst reads), but the
+         comparison itself was wrong and is removed here so a future rule
+         author doesn't conclude entities are safe for literal-character
+         intent in descriptions either. -->
+    <field name="query_params.q" type="pcre2">(?i)('\s*OR\s*'?\d+'?\s*(=|\x3c=|\x3e=|\x3c\x3e|!=|\x3c|\x3e)\s*'?\d+|'\s*OR\s*'[^']*'\s*(=|\x3c=|\x3e=|\x3c\x3e|!=|\x3c|\x3e)\s*'[^']*'|'\s*OR\s*(TRUE|FALSE)\b|UNION\s+(ALL\s+)?SELECT|('|;)\s*--|--$)</field>
     <description>SQL injection attempt on /search (Sigma: 8f6a6b1e-1c3a-4e6a-9b5a-1a2b3c4d5e6f)</description>
     <mitre>
       <id>T1190</id>
@@ -146,8 +176,36 @@
     <field name="method" type="pcre2">^POST$</field>
     <!-- Task 19 (H4): added \n/\r so a newline-separated payload
          (8.8.8.8%0Aid) still matches; the prior alternation had no
-         line-break alternative, so this bypassed detection entirely. -->
-    <field name="form_params.host" type="pcre2">(;|\||&amp;&amp;|\$\(|`|\n|\r)</field>
+         line-break alternative, so this bypassed detection entirely.
+         H73 (2026-08-11): the char class was still blind to IFS-
+         substitution word-splitting bypasses (ping${IFS}8.8.8.8 — avoids
+         the space/semicolon/pipe entirely via shell parameter expansion,
+         $( ) is command substitution, a different open-bracket sequence
+         entirely, so it wasn't already covered) and redirection/append
+         operators (>, >>, <). Added \x24\x7b (catches ${...} parameter
+         expansion generally, the mechanism IFS-substitution relies on)
+         and \x3e/\x3c to the class.
+         URGENT pre-existing bug found live-testing this exact change,
+         same session, not introduced here: `&amp;&amp;` (meant to detect
+         a literal `&&`) was NEVER ACTUALLY WORKING — confirmed via
+         wazuh-logtest that a real `8.8.8.8 &amp;&amp; id` payload did
+         NOT fire this rule, only rule 100100 (the level-0 base). Same
+         root cause as the H72 hex-escape note above: this Wazuh
+         version's `type="pcre2"` field parser does not XML-decode
+         entities before compiling the regex, so `&amp;&amp;` was
+         matching the literal 8-character string "&amp;&amp;" in the
+         input, not two real `&` characters — meaning command-injection
+         detection has been silently non-functional against `&&`-based
+         payloads (one of the most common shell chaining techniques)
+         since the ORIGINAL rule shipped, undetected across every prior
+         "live-verified" pass on this file because none of them happened
+         to test with a real `&&` character specifically. Fixed alongside
+         H73's own additions using the same \xNN hex-escape technique:
+         &amp;&amp; -> \x26\x26. Every character in this class that needed
+         XML escaping is now expressed as a hex escape instead; none of
+         the pre-existing non-XML-special alternatives (;, |, \(, `, \n,
+         \r) were affected by this bug and are left as-is. -->
+    <field name="form_params.host" type="pcre2">(;|\||\x26\x26|\$\(|\x24\x7b|`|\n|\r|\x3e|\x3c)</field>
     <description>OS command injection attempt on /admin/diagnostics (Sigma: 7a8b9c0d-2e3f-4a5b-6c7d-8e9f0a1b2c3d)</description>
     <mitre>
       <id>T1059</id>
