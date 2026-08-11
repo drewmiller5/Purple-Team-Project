@@ -72,6 +72,32 @@ def test_run_heartbeats_every_iteration_with_no_new_alerts(tmp_path):
     assert len(heartbeats) == 4
 
 
+def test_run_handles_corrupt_memory_file_at_recall_gracefully(tmp_path):
+    """H65: shared/memory.py's typed ValueError on corrupt JSON, raised from
+    state.recall_summary() before _wait_for_go, must not crash blue_agent
+    before the round even starts -- blue-agent-side twin of the already-fixed
+    red_agent round-start guard (H17)."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.memory_path).write_text("{not valid json", encoding="utf-8")
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+
+    tool_call_response = {
+        "message": {"role": "assistant", "content": "", "tool_calls": []}
+    }
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = tool_call_response
+        run(config)
+
+        messages_arg = MockOllama.return_value.chat.call_args.kwargs["messages"]
+        assert not any("Past decisions" in m.get("content", "") for m in messages_arg)
+
+    events_path = Path(config.event_log_path)
+    events = [json.loads(l) for l in events_path.read_text().splitlines()]
+    assert any(e["phase"] == "memory_corrupt" for e in events)
+    assert any(e["phase"] == "run_complete" for e in events)
+
+
 def test_run_calls_ollama_and_dispatches_tool_calls_when_new_alerts_appear(tmp_path):
     config = _config(tmp_path, max_iterations=1)
     _touch_go_flag(config)

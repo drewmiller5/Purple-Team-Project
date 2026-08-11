@@ -96,7 +96,11 @@ def run(config) -> None:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(base_url=config.target_base_url)}
     ]
-    past = state.recall_summary()
+    try:
+        past = state.recall_summary()
+    except ValueError as exc:
+        state.log_event({"phase": "memory_corrupt", "error": str(exc)})
+        past = ""
     if past:
         messages.append({"role": "user", "content": f"Past decisions from previous runs:\n{past}"})
 

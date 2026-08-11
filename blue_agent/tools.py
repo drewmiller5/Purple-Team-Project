@@ -184,7 +184,11 @@ def dispatch_tool_call(call: dict, http, state) -> str:
         return json.dumps(result)
 
     if name == "recall_past_findings":
-        summary = state.recall_summary()
+        try:
+            summary = state.recall_summary()
+        except ValueError as exc:
+            state.log_event({"phase": "memory_corrupt", "error": str(exc)})
+            return "No prior findings."
         return summary if summary else "No prior findings."
 
     return json.dumps({"error": f"unknown tool {name}"})

@@ -78,6 +78,22 @@ def test_dispatch_recall_past_findings_defaults_when_empty():
     assert result == "No prior findings."
 
 
+def test_dispatch_recall_past_findings_handles_corrupt_memory():
+    """H66: shared/memory.py's typed ValueError on corrupt JSON, raised
+    from state.recall_summary() when the model calls this tool mid-run,
+    must not crash the process -- same guard as H17's round-start call in
+    loop.py, applied to this second call site."""
+    state = MagicMock()
+    state.recall_summary.side_effect = ValueError("corrupt memory file")
+    call = {"function": {"name": "recall_past_findings", "arguments": {}}}
+
+    result = dispatch_tool_call(call, http=MagicMock(), state=state)
+
+    assert result == "No prior findings."
+    state.log_event.assert_called_once()
+    assert state.log_event.call_args[0][0]["phase"] == "memory_corrupt"
+
+
 def test_dispatch_unknown_tool_returns_error():
     call = {"function": {"name": "nonexistent_tool", "arguments": {}}}
     result = dispatch_tool_call(call, http=MagicMock(), state=MagicMock())
