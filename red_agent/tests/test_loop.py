@@ -517,3 +517,57 @@ def test_run_handles_corrupt_memory_file_at_recall_gracefully(tmp_path):
     events = [json.loads(l) for l in events_path.read_text().splitlines()]
     assert any(e["phase"] == "memory_corrupt" for e in events)
     assert any(e["phase"] == "run_complete" for e in events)
+
+
+# --- Hint mode (2026-08-12): dashboard-toggled per-round flag hints ---
+# Drew's request: isolate whether red can actually exploit + win once it
+# knows exactly where each of the 4 known flags lives, removing discovery-
+# by-chance as a confound. Gated by a referee-state flag file (same shared
+# volume/pattern as go.flag/stop.flag) rather than an env var, because
+# round_helper only restarts existing containers -- it can't inject a new
+# env var per round -- and this needs to be a live dashboard toggle, not a
+# container-recreate operation.
+
+def test_run_includes_hint_addendum_when_hint_mode_flag_present(tmp_path):
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    (Path(config.referee_state_dir) / "hint_mode_red.flag").touch()
+
+    fake_chat_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_chat_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/documents/<id>" in system_content
+        assert "/admin/diagnostics" in system_content
+
+
+def test_run_omits_hint_addendum_by_default(tmp_path):
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    # No hint_mode_red.flag written -- default behavior must be unchanged.
+
+    fake_chat_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_chat_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/documents/<id>" not in system_content
+
+
+def test_run_omits_hint_addendum_when_only_blue_flag_present(tmp_path):
+    """hint_mode_blue.flag targets the other agent -- must not leak into
+    red's own prompt."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    (Path(config.referee_state_dir) / "hint_mode_blue.flag").touch()
+
+    fake_chat_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("red_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_chat_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/documents/<id>" not in system_content

@@ -150,6 +150,100 @@ def test_round_start_endpoint_calls_round_helper(app):
     mock_start.assert_called_once_with("http://round_helper:8090", "round-helper-secret")
 
 
+# --- Hint mode toggle (2026-08-12, upgraded to a 4-way dropdown) ---
+# round_helper only restarts existing containers -- it can't inject a new
+# env var per round -- so hint mode is passed via referee-state flag files
+# (same shared volume/pattern as go.flag/stop.flag), written here at
+# round-start time. Two independent flags (hint_mode_red.flag,
+# hint_mode_blue.flag) instead of one boolean, so the dashboard's
+# off/red/blue/both dropdown can target either side independently. Both
+# must be explicitly cleared when not requested, or a prior round's mode
+# silently leaks into the next one (the same class of bug H27 already
+# found and fixed for go.flag/stop.flag).
+
+@pytest.mark.parametrize("mode,expect_red,expect_blue", [
+    ("red", True, False),
+    ("blue", False, True),
+    ("both", True, True),
+    ("off", False, False),
+])
+def test_round_start_writes_hint_mode_flags_matching_the_selected_mode(app, mode, expect_red, expect_blue):
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS, json={"hint_mode": mode}
+        )
+
+    assert response.status_code == 200
+    state_dir = Path(app.config["REFEREE_STATE_DIR"])
+    assert (state_dir / "hint_mode_red.flag").exists() is expect_red
+    assert (state_dir / "hint_mode_blue.flag").exists() is expect_blue
+
+
+def test_round_start_defaults_to_off_when_hint_mode_unspecified(app):
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post("/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS)
+
+    assert response.status_code == 200
+    state_dir = Path(app.config["REFEREE_STATE_DIR"])
+    assert not (state_dir / "hint_mode_red.flag").exists()
+    assert not (state_dir / "hint_mode_blue.flag").exists()
+
+
+def test_round_start_clears_both_hint_mode_flags_when_a_prior_round_left_them(app):
+    """A prior round's mode must not silently carry over into a round that
+    selected a different (or no) mode."""
+    state_dir = Path(app.config["REFEREE_STATE_DIR"])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "hint_mode_red.flag").touch()
+    (state_dir / "hint_mode_blue.flag").touch()
+
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS, json={"hint_mode": "off"}
+        )
+
+    assert response.status_code == 200
+    assert not (state_dir / "hint_mode_red.flag").exists()
+    assert not (state_dir / "hint_mode_blue.flag").exists()
+
+
+# --- Memory on/off toggle (2026-08-12) ---
+# Same mechanism and leak-prevention rule as hint_mode.flag above -- never
+# wipes red_memory.json/blue_memory.json (the standing never-touch rule),
+# only gates state.py's recall_summary() via the flag file's presence.
+
+def test_round_start_writes_memory_disabled_flag_when_memory_off_requested(app):
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS, json={"memory_enabled": False}
+        )
+
+    assert response.status_code == 200
+    assert Path(app.config["REFEREE_STATE_DIR"], "memory_disabled.flag").exists()
+
+
+def test_round_start_clears_memory_disabled_flag_when_memory_on_or_unspecified(app):
+    """A prior round's memory-off toggle must not silently carry over into
+    a round that didn't ask for it -- same H27-class leak the hint_mode
+    tests already guard against."""
+    state_dir = Path(app.config["REFEREE_STATE_DIR"])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "memory_disabled.flag").touch()
+
+    with patch("dashboard.app.start_round", autospec=True) as mock_start:
+        mock_start.return_value = {"started": ["referee", "red_agent", "blue_agent"]}
+        response = app.test_client().post(
+            "/api/round/start", auth=AUTH, headers=INFRA_ACTION_HEADERS
+        )
+
+    assert response.status_code == 200
+    assert not (state_dir / "memory_disabled.flag").exists()
+
+
 def test_red_action_endpoint_delegates_to_run_red_action(app):
     with patch("dashboard.app.run_red_action", autospec=True) as mock_run:
         mock_run.return_value = {"status_code": 200, "body": "ok"}

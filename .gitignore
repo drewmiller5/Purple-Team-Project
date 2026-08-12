@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 target/purple_lab.db
 target/logs/*.jsonl
 .env

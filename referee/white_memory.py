@@ -18,6 +18,19 @@ _CATEGORY_KEYWORDS = {
 }
 
 
+def flags_matched_by_category(category: str | None) -> set[str]:
+    """Given a red-team finding's free-text category string, return every
+    KNOWN_FLAGS id whose keyword set appears in it (case-insensitive).
+    Shared between white's flag-rotation logic below and referee/monitor.py's
+    win check, so both use the exact same mapping from category text to
+    flag id rather than two copies that could drift apart."""
+    category = (category or "").lower()
+    return {
+        flag for flag, keywords in _CATEGORY_KEYWORDS.items()
+        if any(keyword in category for keyword in keywords)
+    }
+
+
 def _assigned_by_white(white_memory: dict | None) -> list[str]:
     if not white_memory:
         return []
@@ -33,12 +46,8 @@ def _found_by_red(red_memory: dict | None) -> set[str]:
         return set()
     found = set()
     for entry in red_memory.get("entries", []):
-        if not entry.get("success"):
-            continue
-        category = (entry.get("category") or "").lower()
-        for flag, keywords in _CATEGORY_KEYWORDS.items():
-            if any(keyword in category for keyword in keywords):
-                found.add(flag)
+        if entry.get("success"):
+            found |= flags_matched_by_category(entry.get("category"))
     return found
 
 

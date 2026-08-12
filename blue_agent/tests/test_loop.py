@@ -606,3 +606,55 @@ def test_run_never_sends_ollama_a_dangling_tool_message_across_mixed_turns(tmp_p
                 assert predecessor.get("role") == "assistant" and predecessor.get("tool_calls"), (
                     f"dangling tool message at index {i}: predecessor was {predecessor}"
                 )
+
+
+# --- Hint mode (2026-08-12): dropdown lets the dashboard target red,
+# blue, or both -- mirrors red_agent/loop.py's hint_mode_red.flag exactly,
+# but gated on hint_mode_blue.flag instead, so either side can be hinted
+# independently in the same round.
+
+def test_run_includes_hint_addendum_when_hint_mode_blue_flag_present(tmp_path):
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+    (Path(config.referee_state_dir) / "hint_mode_blue.flag").touch()
+
+    fake_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/admin/diagnostics" in system_content
+
+
+def test_run_omits_hint_addendum_by_default(tmp_path):
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+    # No hint_mode_blue.flag written -- default behavior must be unchanged.
+
+    fake_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/admin/diagnostics" not in system_content
+
+
+def test_run_omits_hint_addendum_when_only_red_flag_present(tmp_path):
+    """hint_mode_red.flag targets the other agent -- must not leak into
+    blue's own prompt."""
+    config = _config(tmp_path, max_iterations=1)
+    _touch_go_flag(config)
+    Path(config.alerts_log_path).write_text('{"rule": {"id": "100101"}}\n', encoding="utf-8")
+    (Path(config.referee_state_dir) / "hint_mode_red.flag").touch()
+
+    fake_response = {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    with patch("blue_agent.loop.OllamaClient") as MockOllama:
+        MockOllama.return_value.chat.return_value = fake_response
+        run(config)
+
+        system_content = MockOllama.return_value.chat.call_args.kwargs["messages"][0]["content"]
+        assert "/admin/diagnostics" not in system_content

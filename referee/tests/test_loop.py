@@ -1,5 +1,4 @@
 import json
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from referee.config import RefereeConfig
@@ -199,18 +198,20 @@ def test_run_prefers_red_win_over_budget_expired_when_both_conditions_hold(tmp_p
     """Regression test: ensure red_decisive_win is checked before budget_expired.
     If the if/elif order were changed to check budget_expired first,
     this test would fail by producing outcome='budget_expired' instead of 'red'."""
-    config = _config(tmp_path, max_round_seconds=0, blue_stale_seconds=1)
+    config = _config(tmp_path, max_round_seconds=0)
 
-    # Log blue heartbeat with a timestamp far in the past (so it's stale by run() time)
-    stale_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
-    log_event(config.event_log_path, {
-        "side": "blue", "phase": "heartbeat", "timestamp": stale_timestamp
-    })
+    log_event(config.event_log_path, {"side": "blue", "phase": "heartbeat"})
 
-    # Log red's successful access to /admin/diagnostics
+    # Log a real corroborating SQLi request, then red's confirmed capture
+    # of that flag -- the claim alone is no longer sufficient (2026-08-12
+    # dual-review fix), it must be backed by real http_request evidence.
     log_event(config.event_log_path, {
         "side": "red", "phase": "http_request",
-        "request": {"path": "/admin/diagnostics"}, "response": {"status_code": 200},
+        "request": {"method": "GET", "path": "/search", "params": {"q": "' OR '1'='1"}},
+        "response": {"status_code": 200, "body": "results"},
+    })
+    log_event(config.event_log_path, {
+        "side": "red", "phase": "finding", "category": "SQL Injection", "success": True,
     })
 
     run(config)

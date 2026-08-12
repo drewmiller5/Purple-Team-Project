@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from red_agent.config import RedAgentConfig
@@ -74,6 +75,24 @@ def test_recall_summary_empty_when_memory_disabled_even_with_entries(tmp_path):
     without touching red_memory.json -- record_finding still writes it."""
     state = RedAgentState(_config(tmp_path, memory_enabled=False))
     state.record_finding("sqli", "/search?q= is injectable", True)
+
+    assert state.recall_summary() == ""
+    memory = load_memory(str(tmp_path / "red_memory.json"))
+    assert len(memory["entries"]) == 1
+
+
+def test_recall_summary_empty_when_memory_disabled_flag_present_even_if_config_enabled(tmp_path):
+    """Dashboard memory toggle (2026-08-12): a per-round referee-state flag
+    file overrides the env-var default, same mechanism as hint_mode.flag --
+    round_helper only restarts existing containers, it can't inject a new
+    env var per round, so a live dashboard toggle needs a runtime-checked
+    file instead. Never touches red_memory.json -- record_finding still
+    writes it, only recall is blanked."""
+    state = RedAgentState(_config(tmp_path, memory_enabled=True))
+    state.record_finding("sqli", "/search?q= is injectable", True)
+    state_dir = Path(state.config.referee_state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "memory_disabled.flag").touch()
 
     assert state.recall_summary() == ""
     memory = load_memory(str(tmp_path / "red_memory.json"))

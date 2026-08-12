@@ -167,6 +167,42 @@ def create_app() -> Flask:
         denied = _require_action_token("DASHBOARD_INFRA_ACTION_TOKEN")
         if denied:
             return denied
+
+        # Hint mode (2026-08-12, upgraded to a 4-way off/red/blue/both
+        # dropdown): round_helper only restarts existing containers, it
+        # can't inject a new env var per round, so this is passed via
+        # referee-state flag files instead (same shared-volume pattern as
+        # go.flag/stop.flag) -- each agent checks for its own flag fresh on
+        # every restart. Two independent flags, not one boolean, so either
+        # side can be hinted without the other. Both explicitly cleared
+        # when not selected so a prior round's mode can't silently leak
+        # into this one (H27's same flag-leak lesson, applied here).
+        body = request.get_json(silent=True) or {}
+        state_dir = Path(app.config["REFEREE_STATE_DIR"])
+        state_dir.mkdir(parents=True, exist_ok=True)
+        hint_mode = body.get("hint_mode", "off")
+        hint_mode_red_flag = state_dir / "hint_mode_red.flag"
+        hint_mode_blue_flag = state_dir / "hint_mode_blue.flag"
+        if hint_mode in ("red", "both"):
+            hint_mode_red_flag.touch()
+        else:
+            hint_mode_red_flag.unlink(missing_ok=True)
+        if hint_mode in ("blue", "both"):
+            hint_mode_blue_flag.touch()
+        else:
+            hint_mode_blue_flag.unlink(missing_ok=True)
+
+        # Memory toggle (2026-08-12): same mechanism/leak-prevention as the
+        # hint_mode flags above. Defaults to memory ON (unset/true) --
+        # `memory_enabled` must be explicitly False to disable it. Never
+        # touches red_memory.json/blue_memory.json themselves, only gates
+        # state.py's recall_summary() via this flag file's presence.
+        memory_disabled_flag = state_dir / "memory_disabled.flag"
+        if body.get("memory_enabled", True):
+            memory_disabled_flag.unlink(missing_ok=True)
+        else:
+            memory_disabled_flag.touch()
+
         return jsonify(start_round(app.config["ROUND_HELPER_URL"], app.config["ROUND_HELPER_TOKEN"]))
 
     @app.route("/api/red-action", methods=["POST"])

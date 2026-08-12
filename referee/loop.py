@@ -83,7 +83,7 @@ def run(config) -> None:
         outcome = None
         if go_signaled and blue_decisive_win(round_events, config.blue_win_streak):
             outcome = "blue"
-        elif go_signaled and red_decisive_win(round_events, now, config.blue_stale_seconds):
+        elif go_signaled and red_decisive_win(round_events):
             outcome = "red"
         elif budget_expired:
             outcome = "budget_expired"

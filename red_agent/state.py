@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from shared.event_log import log_event
 from shared.memory import append_memory_entry, load_memory
 
@@ -31,7 +33,13 @@ class RedAgentState:
         self.log_event({"phase": "finding", "category": category, "detail": detail, "success": success})
 
     def recall_summary(self) -> str:
-        if not self.config.memory_enabled:
+        # Dashboard memory toggle (2026-08-12): a per-round referee-state
+        # flag file can additionally disable recall even when
+        # MEMORY_ENABLED=true -- round_helper only restarts existing
+        # containers, it can't inject a new env var per round, so a live
+        # dashboard toggle needs a runtime-checked file (same mechanism as
+        # loop.py's hint_mode.flag), not just the env var.
+        if not self.config.memory_enabled or Path(self.config.referee_state_dir, "memory_disabled.flag").exists():
             return ""
         data = load_memory(self.config.memory_path)
         if not data or not data.get("entries"):

@@ -69,7 +69,8 @@ PAGE = """
     box-shadow: 0 0 10px color-mix(in srgb, var(--series-blue) 70%, transparent);
   }
   .spacer { flex: 1; }
-  .round-controls { display: flex; gap: var(--sp-2); }
+  .round-controls { display: flex; gap: var(--sp-4); align-items: center; }
+  .round-options, .round-actions { display: flex; gap: var(--sp-2); align-items: center; }
   header button {
     background: var(--surface-2); color: var(--text-secondary);
     border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -79,6 +80,33 @@ PAGE = """
   header button:hover { color: var(--text-primary); background: var(--surface-3); border-color: var(--border-strong); }
   header button.ctrl-go:hover    { border-color: color-mix(in srgb, var(--status-good) 55%, transparent); color: var(--status-good); }
   header button.ctrl-stop:hover  { border-color: color-mix(in srgb, var(--status-critical) 55%, transparent); color: var(--status-critical); }
+
+  /* Round-option chips (hint mode, memory) -- same visual language as
+     header buttons above so the whole command bar reads as one system. */
+  .toggle-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-2); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background .16s ease, color .16s ease, border-color .16s ease;
+  }
+  .toggle-chip:hover { color: var(--text-primary); background: var(--surface-3); border-color: var(--border-strong); }
+  .toggle-chip:has(input:checked) {
+    color: var(--series-blue); background: color-mix(in srgb, var(--series-blue) 12%, transparent);
+    border-color: color-mix(in srgb, var(--series-blue) 45%, transparent);
+  }
+  .toggle-chip input[type="checkbox"] { accent-color: var(--series-blue); width: 13px; height: 13px; cursor: pointer; margin: 0; }
+  .toggle-chip select {
+    background: transparent; color: inherit; border: none; font: inherit;
+    font-size: 12px; font-weight: 600; cursor: pointer; padding: 0;
+  }
+  /* The closed <select> inherits the chip's color fine, but the native
+     option-list popup doesn't reliably pick up color-scheme: dark on
+     Windows -- force explicit contrast so the open list is never
+     light-text-on-light-background. */
+  .toggle-chip select option {
+    background: var(--surface-1); color: var(--text-primary);
+  }
 
   .badge {
     padding: 5px 12px; border-radius: 999px; font-size: 11px; font-weight: 700;
@@ -238,10 +266,26 @@ PAGE = """
   <h1>Purple Team Live View</h1>
   <div class="spacer"></div>
   <div class="round-controls">
-    <button id="btn-clear">Clear Flags</button>
-    <button id="btn-stop" class="ctrl-stop">Stop Round</button>
-    <input type="password" id="infra-action-token" placeholder="Infra token" title="Required to start a round -- separate from the red/blue action tokens and the dashboard login (H55)." style="width: 9em;" required autocomplete="off">
-    <button id="btn-start" class="ctrl-go">Start Round</button>
+    <div class="round-options">
+      <input type="password" id="infra-action-token" placeholder="Infra token" title="Required to start a round -- separate from the red/blue action tokens and the dashboard login (H55)." style="width: 9em;" required autocomplete="off">
+      <label class="toggle-chip" title="Give explicit endpoint/param hints for all 4 known flags instead of pure discovery, targeting red, blue, or both -- isolates whether an agent can exploit/detect + win once it knows exactly where to look.">
+        Hints
+        <select id="hint-mode-select">
+          <option value="off">Off</option>
+          <option value="red">Red</option>
+          <option value="blue">Blue</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+      <label class="toggle-chip" title="Uncheck to disable red/blue's recall_past_findings for this round only -- red_memory.json/blue_memory.json are never touched, this only blanks what each agent recalls at the start of the round.">
+        <input type="checkbox" id="memory-toggle" checked> Memory
+      </label>
+    </div>
+    <div class="round-actions">
+      <button id="btn-clear">Clear Flags</button>
+      <button id="btn-stop" class="ctrl-stop">Stop Round</button>
+      <button id="btn-start" class="ctrl-go">Start Round</button>
+    </div>
   </div>
   <span id="round-badge" class="badge idle"><span class="dot"></span>loading&hellip;</span>
 </header>
@@ -562,7 +606,14 @@ document.getElementById('btn-clear').addEventListener('click', () => fetch('/api
 document.getElementById('btn-stop').addEventListener('click', () => fetch('/api/round/stop', { method: 'POST' }).then(tick));
 document.getElementById('btn-start').addEventListener('click', () => fetch('/api/round/start', {
   method: 'POST',
-  headers: { 'X-Action-Token': document.getElementById('infra-action-token').value },
+  headers: {
+    'X-Action-Token': document.getElementById('infra-action-token').value,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    hint_mode: document.getElementById('hint-mode-select').value,
+    memory_enabled: document.getElementById('memory-toggle').checked,
+  }),
 }).then(tick));
 
 function showToast(message, ok) {
