@@ -1,163 +1,90 @@
 # Purple Team AI Lab
 
-IT567 term paper project — testing whether a low-stakes, autonomous AI
-red-team agent can beat a blue-team agent with first-mover advantage,
-per Garfinkel & Dafoe's offense-defense theory.
+### For Research and Educational Use Only.
 
-Phase 1 (this repo, in progress): the target range and shared
-infrastructure. Red and blue agents are Plans 2 and 3.
+## Why I Built This
 
-See `docs/design.md` for the full spec.
+Commercial AI is assumed to be better at defense than offense with content filtering and ethical alignment are supposed to suppress attack capability while leaving detection intact. That's a theoretical assumption, never actually tested. This is a live purple-team lab, built for IT567 (Global Cybersecurity and Cyber Warfare), that tests it directly: a red-team AI with a single target on an internal host, a blue-team AI defending it, both running continuously and asynchronously that is not turn-based and not scripted to be fair to each other, because real conflict isn't either.
 
-## Local dev
+My working assumption going in was that defense would hold the advantage, since most AI training and most cyber roles skew defensive. This lab exists to test whether that holds.
+
+Building it was grueling the recent bug-bounty and fix cycle alone took a lot out of me, on top of just getting the project off the ground. What I found: AI is more capable at both offense then what it is given it credit for. After finishing the project I did a second bug-bounty pass after the repo had been live as a way to improve it to the standard I wanted it to be.
+
+## How It Works
+
+Two Ollama-driven agents fight over a real, deliberately vulnerable Flask app, with a referee judging the round and a live dashboard to watch or play along:
+
+| Component | Role |
+|---|---|
+| `target/` | The attack surface — a small "Meridian Logistics" freight-tracking site with four seeded vulnerabilities (SQLi, weak/no-lockout admin login, IDOR, OS command injection). No advance knowledge is given to red; it's a real black box. |
+| `red_agent/` | Ollama-driven attacker loop. Starts with nothing but a URL. Recon → find a seeded vuln → foothold → escalate, consulting its own memory of what's worked before. |
+| `blue_agent/` | Reasons over real Wazuh SIEM alerts and decides whether to escalate — ban an IP, lock an account, kill a session — via Wazuh's Active Response layer, which does most of the actual defending natively. |
+| `referee/` | Judges each round (decisive win / timeout), assigns red's next target vulnerability via a white-team memory that tracks what's already been found, and prevents stale state from bleeding into a new round. |
+| `purple_dashboard/` (`dashboard/`) | Live observability at `localhost:8080` — five tabs (red/blue/white/advisor/combined ledger), a purple-team AI advisor, and a manual-play mode so a human can fire the same red/blue actions the agents do. |
+| `round_helper/` | A narrowly-scoped control plane (the only container with `docker.sock` access) for restarting containers between rounds. |
+| Wazuh stack | Manager, indexer, and dashboard — real SIEM detection against custom Sigma-style rules (`wazuh-rules/`) written for the four seeded vulns. |
+| `shared/` | The persistence layer both agents build on — append-only event log, per-side memory files. |
+
+Everything runs on an isolated Docker bridge network with no internet egress — the target and red agent can't reach anything real, by design. Both agents run on free, local Ollama models (`qwen2.5:7b` by default), so the experiment itself is zero-cost by construction, not just low-stakes in theory.
+
+Full architecture rationale: `docs/design.md`.
+
+## Quickstart
+
+    pipenv run python scripts/bootstrap.py
+
+Generates `.env` with random secrets if it doesn't exist yet (including syncing Wazuh's indexer password hashes into its config — a plain env var alone isn't enough for those), brings the full stack up, and prints a copy-paste credentials block for every login surface (target's seeded staff creds, the dashboard, Wazuh). Also saves that block to `QUICKSTART_CREDENTIALS.md` (gitignored). Safe to re-run — never touches an `.env` that already exists.
+
+## Local dev (no Docker)
 
     pipenv install --dev
     pipenv run pytest
 
-## Run the target app locally (without Docker)
-
+    # run just the target app
     pipenv run python -m target.app
 
-## Run in Docker (isolated network)
+## Manual Docker setup
 
-### Quickstart
-
-    pipenv run python scripts/bootstrap.py
-
-Generates `.env` with random secrets if it doesn't exist yet (including
-syncing the Wazuh indexer's bcrypt password hashes into
-`wazuh/config/wazuh_indexer/internal_users.yml` -- a plain env var alone
-isn't enough for those two), brings the stack up, and prints a copy-paste
-credentials block for every login surface (target's seeded staff creds, the
-round-control dashboard, and Wazuh). Also saves that block to
-`QUICKSTART_CREDENTIALS.md` (gitignored) for later reference. Safe to
-re-run -- it never touches an `.env` that already exists.
-
-### Manual setup
-
-Requires `INTERNAL_ACTION_TOKEN` set (shared secret authenticating `target`'s
-internal defensive endpoints against `blue_agent` and Wazuh's active-response
-scripts; no default, the stack fails closed without it), `ROUND_HELPER_TOKEN`
-set (round_helper's own dedicated secret for its docker.sock-backed
-container-restart control plane, distinct from `INTERNAL_ACTION_TOKEN`; also
-no default), `DASHBOARD_AUTH_TOKEN` set (password for the dashboard's HTTP
-Basic Auth, username hardcoded as `operator`; also no default), and 3 more
-dashboard tokens described in the Dashboard section below (also no default).
-Copy `.env.example` to
-`.env` and fill in random values, or export them directly:
+Requires `INTERNAL_ACTION_TOKEN`, `ROUND_HELPER_TOKEN`, `DASHBOARD_AUTH_TOKEN`, and three dashboard action tokens (below) — all fail-closed, no defaults. Copy `.env.example` to `.env` and fill in values, or let `scripts/bootstrap.py` generate them:
 
     cp .env.example .env   # then edit .env
     docker compose up --build
 
-### Dashboard (host port 8080)
+## Dashboard (host port 8080)
 
-The human-operable dashboard is served on `http://localhost:8080`, behind
-reusable plaintext HTTP Basic Auth (no TLS) -- `DASHBOARD_AUTH_TOKEN`. That's
-an acceptable trade-off for a local, single-operator lab, but the port should
-never be bound to a routable or non-localhost interface.
+Served at `http://localhost:8080` behind HTTP Basic Auth (`DASHBOARD_AUTH_TOKEN`, username `operator`) — plaintext, no TLS, an acceptable trade-off for a local single-operator lab, but the port should never be bound to a routable interface.
 
-**H55: separation of duties.** `DASHBOARD_AUTH_TOKEN` only grants viewing the
-dashboard, not acting through it. Firing a red action, firing a blue action,
-and starting a round (which reaches `round_helper`'s docker.sock-backed
-container-restart control plane) are 3 separate privilege domains, each
-gated by its own token -- `DASHBOARD_RED_ACTION_TOKEN`,
-`DASHBOARD_BLUE_ACTION_TOKEN`, `DASHBOARD_INFRA_ACTION_TOKEN` -- pasted once
-into that action's own field on the page (never cached by the browser like
-the Basic Auth login is). One leaked token grants at most one capability,
-never all three or the dashboard itself. `scripts/bootstrap.py` generates
-all 4 tokens automatically and prints them together in the quickstart
-credentials block.
+**Separation of duties:** viewing the dashboard, firing a red action, firing a blue action, and starting a round (which reaches `round_helper`'s `docker.sock`-backed control plane) are four separate privilege domains, each gated by its own token (`DASHBOARD_AUTH_TOKEN`, `DASHBOARD_RED_ACTION_TOKEN`, `DASHBOARD_BLUE_ACTION_TOKEN`, `DASHBOARD_INFRA_ACTION_TOKEN`). A leaked token grants at most one capability. `scripts/bootstrap.py` generates all four automatically.
 
-### Target app (host port 5000) -- the attack surface itself
+## Target app (host port 5000) — the attack surface itself
 
-`target` is reachable at `http://localhost:5000` (bound to `127.0.0.1`
-only) via a small forwarding-only `target-relay` container, so a human
-operator can browse to it and manually try the four seeded vulnerabilities
-below, not just watch `red_agent` do it automatically. No auth in front of
-it -- that's intentional, it's the thing being attacked. `target` itself
-never has a published port or a non-internal network of its own (that
-would give it real internet egress, which this project's design
-explicitly forbids -- see `docker-compose.yml`'s `target-host-net`
-comment); the relay is the only thing that touches a non-internal network,
-and it has no application code, credentials, or data of its own to
-compromise. Same `127.0.0.1`-under-"mirrored"-WSL2-networking caveat below
-applies here too, with a worse consequence if it ever occurs -- unlike the
-Wazuh services, nothing gates access to `target` at all.
+Reachable at `http://localhost:5000` (bound to `127.0.0.1` only, via a forwarding-only `target-relay` container) so a human can manually try the four seeded vulnerabilities, not just watch `red_agent` do it. No auth in front of it — that's intentional, it's the thing being attacked. `target` itself never has a published port or real network egress of its own.
 
 ## Security notes
 
-- The Wazuh indexer/API/dashboard credentials are no longer the upstream
-  [`wazuh-docker`](https://github.com/wazuh/wazuh-docker) demo defaults
-  (`SecretPassword`, `kibanaserver`/`kibanaserver`) -- they're rotated,
-  externally-supplied values read from `.env` (`WAZUH_INDEXER_PASSWORD`,
-  `WAZUH_API_PASSWORD`, `WAZUH_DASHBOARD_PASSWORD`; see `.env.example` and
-  `wazuh/README.md`), and the manager/dashboard host ports still published
-  (1514, 1515, 514, 443) are bound to `127.0.0.1` only, not all interfaces.
-  The raw indexer API (9200) and manager API (55000) are no longer
-  published to the host at all -- debugging convenience only (curl/
-  Postman), not something the experiment needs, and observed live to
-  silently and inconsistently drop their loopback binding across Docker
-  Desktop engine restarts; removed rather than chased.
-  Agent enrollment additionally requires a pre-shared key
-  (`wazuh/config/wazuh_cluster/authd.pass`, generated locally, gitignored).
-  `red_agent` is not attached to `wazuh-net` (the network `wazuh.manager`/
-  `wazuh.indexer`/`wazuh.dashboard` share) -- only `target` is, multi-homed
-  for agent enrollment. This closes findings H7 and H48, and closes H53's
-  hostname/DNS-based access (raw-IP access to `wazuh.dashboard` from
-  `agent-net`/`lab-net` remains open -- believed to be a general Docker
-  `ports:` publishing behavior, not this platform specifically; see
-  `docker-compose.yml`'s `wazuh.dashboard` `networks:` comment). H52
-  (partial -- see below) is also open. See
-  `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md` for full detail.
-  Caveat: `127.0.0.1`-only binding can behave inconsistently under Docker
-  Desktop/WSL2's networking modes (e.g. "mirrored" WSL2 networking has had
-  reports of loopback-bound ports being reachable from elsewhere on the
-  LAN) -- if there's any doubt the binding is actually restrictive on your
-  setup, verify from another device on the LAN rather than assuming.
-- No TLS termination on `target`, `purple_dashboard`, or `round_helper`
-  (H52) is still open -- low risk for a genuinely local-only deployment,
-  documented as a known gap rather than fixed here.
-- `target/app.py`'s four seeded vulnerabilities (below) are intentional --
-  that's the point of the lab. Findings that were *not* intentional (a
-  hardcoded Flask session key, unsanitized alert data reaching the blue
-  agent's LLM context) are fixed; see the findings ledger for the full,
-  transparently-tracked list of what's fixed vs. still open.
+- Wazuh credentials are rotated, externally-supplied values from `.env`, not the upstream demo defaults. Manager/dashboard host ports are bound to `127.0.0.1` only; the raw indexer/manager APIs (9200, 55000) aren't published to the host at all. Agent enrollment requires a locally-generated pre-shared key. `red_agent` has no access to the Wazuh network — only `target` does.
+- No TLS termination anywhere (known, accepted gap for a genuinely local-only deployment).
+- The target's four seeded vulnerabilities are intentional — that's the point of the lab. Unintentional findings (a hardcoded session key, unsanitized alert data reaching the blue agent's LLM context) are fixed.
+- `127.0.0.1`-only binding can behave inconsistently under Docker Desktop/WSL2's "mirrored" networking mode — if in doubt, verify from another device on the LAN rather than assuming.
 
-## What's built (Phase 1: Target Range + Core Infrastructure)
+Full detail: `docs/ledger/plans/2026-07-28-plan-3c-findings-ledger.md`.
 
-- `target/` — Flask app with four intentionally-seeded vulnerabilities:
-  SQLi in `/search`, weak/default admin creds + no lockout on
-  `/admin/login`, IDOR on `/documents/<id>`, and OS command injection on
-  `/admin/diagnostics` (the designed win-path escalation). Every seeded
-  vuln has a regression test proving it's exploitable.
-- `wazuh-rules/target_rules.xml` — the Wazuh detection rules for the
-  vulnerabilities above; see `docs/detection-rules.md` for a readable
-  writeup of what each rule does and why two of them are intentionally
-  defined but never fire (Wazuh's own correlation limitation, worked
-  around at the Active Response layer instead).
-- `shared/memory.py`, `shared/event_log.py` — the persistence layer the
-  red and blue agents (Plans 2 and 3) will both build on.
-- `scripts/capture_checkpoint.py` — snapshots memory + event log into
-  `archive/vN/`, committed to git as the visible learning-curve record.
-- `docker-compose.yml` — isolated bridge network, no internet egress.
+## Process — how this actually got built
 
-Next: Plan 2 (red agent) and Plan 3 (blue agent), per `docs/design.md`.
+This wasn't a single build-and-ship pass. It went through two full bug-bounty hunts (one before the first public push, one after the repo had been live a while) against every component, then a TDD + dual-independent-review fix loop on everything either one found — every fix has a failing test written first and gets reviewed by two independent passes before it's marked closed. The full findings ledger, including what's still open and why, is tracked in `docs/ledger/` rather than hidden — a transparent in-progress roadmap, not a claim that this is bug-free. This project in nearing the end as I am looking forward to what will be built next this fall. 
 
-**Note:** Docker runtime verification (build, run, network isolation) is deferred until Docker is installed locally.
+## What's Built
+
+- `target/` — Flask attack surface, four seeded vulnerabilities, each with a regression test proving it's exploitable.
+- `red_agent/` / `blue_agent/` — the two Ollama-driven agent loops, each with their own persisted memory (`shared/memory.py`) and event log (`shared/event_log.py`).
+- `referee/` — round judging, win conditions, white-team flag assignment (`referee/white_memory.py`).
+- `dashboard/` — live 5-tab observability UI, manual-play mode, purple-team AI advisor.
+- `round_helper/` — scoped round-restart control plane.
+- `wazuh-rules/` — custom detection rules for the seeded vulnerabilities (`docs/detection-rules.md` has the readable writeup).
+- `scripts/bootstrap.py` — one-command setup with generated secrets and a credentials printout.
+- `scripts/capture_checkpoint.py` — snapshots memory + event log into `archive/vN/`, a visible learning-curve record over time.
+- `docker-compose.yml` — the full isolated-network stack, no internet egress anywhere.
 
 ## Future work
 
-- **Try a stronger/newer model.** `red_agent`/`blue_agent` both run on
-  `OLLAMA_MODEL` (env var, defaults to `qwen2.5:7b` -- no code change
-  needed to swap it, see `.env.example`). The paper's own results and
-  this repo's current round-timing constants (`RED_MAX_ITERATIONS`,
-  `BLUE_MAX_ITERATIONS`, the referee's 900s round budget) were tuned
-  against qwen2.5:7b's observed pace, so a bigger model isn't a drop-in
-  swap -- it'd need its own re-tuning pass, not just an env var change.
-  Worth trying regardless: giving the agents a genuinely current model
-  (browse [ollama.com/search](https://ollama.com/search) for what's
-  available; `qwen3:30b` looks like a good next step) is a natural way to
-  see whether the offense-defense balance this project studies shifts as
-  the underlying model gets stronger -- modern problems deserve a shot
-  against modern models, not just whatever was current when the lab was
-  first built.
+- **Try a stronger/newer model.** Both agents run on `OLLAMA_MODEL` (env var, defaults to `qwen2.5:7b`). Current round-timing constants were tuned against that model's pace, so a bigger model needs its own re-tuning pass, not just a swap — but seeing whether the offense-defense balance shifts as the underlying model gets stronger (`qwen3:30b` looks like a good next step) is a natural next experiment.
